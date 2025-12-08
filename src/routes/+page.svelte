@@ -130,6 +130,7 @@
 			<button on:click={getUsernameId} type="button" class="btn variant-ghost-primary"
 				>Let's go</button
 			>
+			<a href="/scans" class="btn variant-ghost-secondary">View History</a>
 		</form>
 
 		{#if loading}

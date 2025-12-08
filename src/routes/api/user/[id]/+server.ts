@@ -56,26 +56,7 @@ export const GET = async ({ params, url }) => {
 			});
 			const userData = response.data.data.user;
 
-			// Debug logging
-			if (scrollCycle === 0) {
-				console.log('Fetched User Data:', {
-					username: userData.username,
-					id: userData.id,
-					full_name: userData.full_name
-				});
-			}
-
 			receivedData = userData.edge_follow;
-
-			// Update scan with username if we haven't yet (fallback if not provided in URL)
-			if (scrollCycle === 0 && userData.username && !username) {
-				try {
-					console.log(`Updating scan ${scan_id} with username from Instagram: ${userData.username}`);
-					await pb.collection("scans").update(scan_id, { username: userData.username });
-				} catch (err) {
-					console.error("Failed to update scan with username:", err);
-				}
-			}
 
 		} catch (error: unknown) {
 			if (axios.isAxiosError(error)) {
