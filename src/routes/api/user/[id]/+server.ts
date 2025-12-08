@@ -121,10 +121,29 @@ export const GET = async ({ params, url }) => {
 		);
 	}
 
+	// Calculate stats
+	const verifiedCount = results.filter((u) => u.is_verified).length;
+	const privateCount = results.filter((u) => u.is_private).length;
+
+	// Update the scan record with the total count and stats
+	try {
+		console.log(`Updating scan ${scan_id} with count: ${totalFollowedUsersCount}, verified: ${verifiedCount}`);
+		await pb.collection("scans").update(scan_id, {
+			count: totalFollowedUsersCount,
+			verified_count: verifiedCount,
+			private_count: privateCount
+		});
+	} catch (e) {
+		console.error("Failed to update scan stats:", e);
+	}
+
 	return json({
 		user_id,
 		totalFollowedUsersCount,
+		verifiedCount,
+		privateCount,
 		percentage,
 		results
 	});
 };
+

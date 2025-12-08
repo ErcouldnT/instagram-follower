@@ -34,6 +34,9 @@ export type AuthSystemFields<T = never> = {
 export type ScansRecord = {
     user_id: string
     username?: string
+    count?: number
+    verified_count?: number
+    private_count?: number
     created?: IsoDateString
     updated?: IsoDateString
 }

@@ -49,8 +49,10 @@
 	"dependencies": {
 		"@floating-ui/dom": "^1.6.13",
 		"axios": "^1.8.3",
+		"chart.js": "^4.5.1",
 		"highlight.js": "^11.11.1",
 		"lucide-svelte": "^0.483.0",
-		"pocketbase": "^0.26.5"
+		"pocketbase": "^0.26.5",
+		"svelte-chartjs": "^3.1.5"
 	}
 }
