@@ -2,7 +2,6 @@
 	import axios from "axios";
 	import { onMount } from "svelte";
 	import { Avatar, ProgressRadial } from "@skeletonlabs/skeleton";
-	// import { supabase } from "$lib/supabase";
 	import type { UserNode } from "$lib/user.types";
 
 	let username: string = "";
@@ -50,31 +49,12 @@
 
 			const user = users[0].user;
 			const usernameFound = user.username;
-
-			// if (usernameFound !== username) {
-			// 	alert("Kullanıcı adı bulunamadı");
-			// 	return;
-			// }
-
-			// ds_user_id = user.pk;
-
-			// const { error: supabaseError } = await supabase
-			// 	.from("searches")
-			// 	.insert([{ username, ds_user_id }]);
-
-			// if (supabaseError) {
-			// 	console.error("Supabase'e veri eklenirken hata oluştu:", supabaseError.message);
-			// } else {
-			// 	console.log("Arama veritabanına eklendi: ", username, ds_user_id);
-			// }
-
-			// getFollowers();
 		} catch (err) {
 			console.error("Beklenmeyen bir hata oluştu:", err);
 		}
 	};
 
-	const chooseProfile = async (id: string) => {
+	const chooseProfile = async (id: string, username: string) => {
 		ds_user_id = id;
 		response = ""; // Clear previous response
 
@@ -110,7 +90,9 @@
 		// });
 		// }
 
-		const { data, error } = await fetchData(`/api/user/${ds_user_id}`);
+		const { data, error } = await fetchData(
+			`/api/user/${ds_user_id}?username=${encodeURIComponent(username)}`
+		);
 		if (error) {
 			console.error("Veri alınırken hata oluştu:", error);
 			return;
@@ -172,7 +154,7 @@
 					<!-- svelte-ignore a11y-click-events-have-key-events -->
 					<!-- svelte-ignore a11y-no-static-element-interactions -->
 					<div
-						on:click={() => chooseProfile(data.user.id)}
+						on:click={() => chooseProfile(data.user.id, data.user.username)}
 						class="p-2 border border-transparent flex items-center space-x-5 cursor-pointer hover:border hover:border-dashed hover:border-primary-500 rounded-lg"
 					>
 						<Avatar

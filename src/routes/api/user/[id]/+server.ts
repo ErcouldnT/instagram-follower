@@ -1,6 +1,6 @@
 import axios from "axios";
 import { json } from "@sveltejs/kit";
-import { supabase } from "$lib/supabase";
+import { pb } from "$lib/pocketbase";
 import { cookieString, sleep, urlGenerator } from "$lib/utils";
 import type { Timings, User, UserNode } from "$lib/user.types.js";
 import {
@@ -17,13 +17,7 @@ const timings: Timings = {
 	timeToWaitAfterFiveUnfollows: DEFAULT_TIME_TO_WAIT_AFTER_FIVE_UNFOLLOWS
 };
 
-// let scanningPaused = false;
-
-// function pauseScan() {
-// 	scanningPaused = !scanningPaused;
-// }
-
-export const GET = async ({ params }) => {
+export const GET = async ({ params, url }) => {
 	const results: UserNode[] = [];
 	let scrollCycle = 0;
 	let hasNext = true;
@@ -33,44 +27,56 @@ export const GET = async ({ params }) => {
 	let percentage = 0;
 
 	const user_id = params.id;
+	// url comes from SvelteKit event
+	const username = url.searchParams.get("username") || "";
 
-	const { data: scanData, error: scanError } = await supabase
-		.from("scans")
-		.insert({ user_id })
-		.select();
+	let scan_id: string;
 
-	const scan_id = scanData && scanData[0].id;
-
-	if (scan_id === null) {
-		return json({ error: "scan_id cannot be null" }, { status: 400 });
+	try {
+		console.log(`Creating scan for user_id: ${user_id}, username: ${username}`);
+		const scan = await pb.collection("scans").create({ user_id, username });
+		scan_id = scan.id;
+	} catch (error) {
+		console.error("Pocketbase scan creation error:", error);
+		return json({ error: "Failed to create scan record" }, { status: 500 });
 	}
 
-	let url = urlGenerator(user_id);
-	// const encoder = new TextEncoder();
+	let instagramUrl = urlGenerator(user_id);
 
-	// const stream = new ReadableStream({
-	// 	async start(controller) {
-	// try {
 	while (hasNext) {
 		let receivedData: User;
 
-		// try {
-		// 	receivedData = (await fetch(url).then((res) => res.json())).data.user.edge_follow;
-		// } catch (e) {
-		// 	console.error(e);
-		// 	continue;
-		// }
-
 		try {
-			const response = await axios.get(url, {
+			const response = await axios.get(instagramUrl, {
 				headers: {
 					Cookie: cookieString
 				},
 				withCredentials: true,
 				timeout: 10000 // ms cinsinden (örneğin burada 10 saniye)
 			});
-			receivedData = response.data.data.user.edge_follow;
-			// return json(receivedData);
+			const userData = response.data.data.user;
+
+			// Debug logging
+			if (scrollCycle === 0) {
+				console.log('Fetched User Data:', {
+					username: userData.username,
+					id: userData.id,
+					full_name: userData.full_name
+				});
+			}
+
+			receivedData = userData.edge_follow;
+
+			// Update scan with username if we haven't yet (fallback if not provided in URL)
+			if (scrollCycle === 0 && userData.username && !username) {
+				try {
+					console.log(`Updating scan ${scan_id} with username from Instagram: ${userData.username}`);
+					await pb.collection("scans").update(scan_id, { username: userData.username });
+				} catch (err) {
+					console.error("Failed to update scan with username:", err);
+				}
+			}
+
 		} catch (error: unknown) {
 			if (axios.isAxiosError(error)) {
 				return json({ error: error.message, details: error.response?.data }, { status: 500 });
@@ -84,22 +90,11 @@ export const GET = async ({ params }) => {
 		}
 
 		hasNext = receivedData.page_info.has_next_page;
-		url = urlGenerator(user_id, receivedData.page_info.end_cursor);
+		instagramUrl = urlGenerator(user_id, receivedData.page_info.end_cursor);
 		currentFollowedUsersCount += receivedData.edges.length;
 		percentage = Math.floor((currentFollowedUsersCount / totalFollowedUsersCount) * 100);
 
 		receivedData.edges.forEach((x) => results.push(x.node));
-
-		// for (const user of receivedData.edges) {
-		// 	const chunk = JSON.stringify(user.node);
-		// 	controller.enqueue(encoder.encode(chunk + "\n"));
-		// }
-
-		// Pause scanning if user requested so.
-		// while (scanningPaused) {
-		// 	await sleep(1000);
-		// 	console.info("Scan paused");
-		// }
 
 		await sleep(
 			Math.floor(
@@ -112,23 +107,11 @@ export const GET = async ({ params }) => {
 		if (scrollCycle > 6) {
 			scrollCycle = 0;
 			console.log({
-				// show: true,
 				text: `Sleeping ${timings.timeToWaitAfterFiveSearchCycles / 1000} seconds to prevent getting temp blocked`
 			});
 			await sleep(timings.timeToWaitAfterFiveSearchCycles);
 		}
-		// setToast({ show: false });
 	}
-	// 			controller.close();
-	// 		} catch (error) {
-	// 			controller.error("Veri alınamadı");
-	// 		}
-	// 	}
-	// });
-
-	// return new Response(stream, {
-	// 	headers: { "Content-Type": "application/json; charset=utf-8" }
-	// });
 
 	const mappedResults = results.map((user) => ({
 		scan_id,
@@ -143,29 +126,24 @@ export const GET = async ({ params }) => {
 		requested_by_viewer: user.requested_by_viewer
 	}));
 
-	const { data: userData, error: userError } = await supabase.from("users").insert(mappedResults);
+	// Pocketbase doesn't support bulk insert directly like Supabase, so we loop.
+	// We use Promise.all to do it in parallel, but maybe in chunks if too many.
+	// For now, let's try parallel chunks of 50 to avoid hitting limits if any.
+
+	const chunkSize = 50;
+	for (let i = 0; i < mappedResults.length; i += chunkSize) {
+		const chunk = mappedResults.slice(i, i + chunkSize);
+		await Promise.all(
+			chunk.map((data) => pb.collection("instagram_users").create(data).catch((err) => {
+				console.error("Error creating user:", data.username, err);
+			}))
+		);
+	}
 
 	return json({
 		user_id,
-		// currentFollowedUsersCount,
 		totalFollowedUsersCount,
-		// scrollCycle,
 		percentage,
-		// scanningPaused,
 		results
 	});
-
-	// try {
-	// 	const response = await axios.get(url, {
-	// 		headers: {
-	// 			Cookie: cookieString
-	// 		},
-	// 		withCredentials: true,
-	// 		timeout: 10000 // ms cinsinden (örneğin burada 10 saniye)
-	// 	});
-
-	// 	return json(response.data);
-	// } catch (error) {
-	// 	return json({ error: "Veri alınamadı" }, { status: 500 });
-	// }
 };
