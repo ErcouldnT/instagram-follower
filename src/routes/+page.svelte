@@ -1,8 +1,9 @@
 <script lang="ts">
 	import axios from "axios";
 	import { onMount } from "svelte";
-	import { Avatar, ProgressRadial } from "@skeletonlabs/skeleton";
+	import { Avatar } from "@skeletonlabs/skeleton";
 	import type { UserNode } from "$lib/user.types";
+	import { scanStore } from "$lib/stores/scanStore";
 
 	let username: string = "";
 	let ds_user_id: string | null;
@@ -12,8 +13,6 @@
 	// let nextCode = "";
 	let response = "";
 	let loading = false;
-	let scanProgress = 0;
-	let scanStatus = "Initializing...";
 
 	const fetchData = async (url: string) => {
 		loading = true;
@@ -56,56 +55,9 @@
 		}
 	};
 
-	const chooseProfile = async (id: string, username: string) => {
+	const chooseProfile = async (id: string, targetUsername: string) => {
 		ds_user_id = id;
-		response = "";
-		loading = true;
-		scanProgress = 0;
-		scanStatus = "Starting scan...";
-
-		try {
-			const res = await fetch(`/api/user/${ds_user_id}?username=${encodeURIComponent(username)}`);
-			if (!res.body) throw new Error("No response body");
-
-			const reader = res.body.getReader();
-			const decoder = new TextDecoder();
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				const chunk = decoder.decode(value, { stream: true });
-				const lines = chunk.split("\n");
-
-				for (const line of lines) {
-					if (!line.trim()) continue;
-					try {
-						const data = JSON.parse(line);
-
-						if (data.type === "progress") {
-							scanProgress = data.percentage;
-							scanStatus = `Scanning... ${data.current} / ${data.total} (${data.percentage}%)`;
-						} else if (data.type === "log") {
-							console.log("Server Log:", data.message);
-							scanStatus = data.message;
-						} else if (data.type === "done") {
-							scanStatus = "Scan Complete!";
-							response = JSON.stringify(data, null, 2);
-						} else if (data.error) {
-							console.error("Stream error:", data.error);
-							alert("Error: " + data.error);
-						}
-					} catch (e) {
-						console.error("Error parsing stream chunk", e);
-					}
-				}
-			}
-		} catch (e) {
-			console.error("Fetch error:", e);
-			alert("Failed to start scan");
-		} finally {
-			loading = false;
-		}
+		scanStore.startScan(id, targetUsername);
 	};
 
 	onMount(() => {
@@ -137,16 +89,9 @@
 		</form>
 
 		{#if loading}
-			<div
-				class="flex flex-col items-center space-y-2 justify-center p-4 card variant-soft-surface"
-			>
-				<ProgressRadial value={scanProgress} />
-				<p class="font-semibold text-lg">{scanStatus}</p>
-				{#if scanProgress > 0}
-					<div class="w-full bg-surface-200 rounded-full h-2.5 dark:bg-surface-700 mt-2">
-						<div class="bg-primary-500 h-2.5 rounded-full" style="width: {scanProgress}%"></div>
-					</div>
-				{/if}
+			<!-- Simple spinner for Search loading, not scan -->
+			<div class="flex flex-col items-center space-y-2 justify-center">
+				<p class="font-semibold">Searching User...</p>
 			</div>
 		{/if}
 
