@@ -18,20 +18,11 @@ const timings: Timings = {
 };
 
 export const GET = async ({ params, url }) => {
-	const results: UserNode[] = [];
-	let scrollCycle = 0;
-	let hasNext = true;
-	let currentFollowedUsersCount = 0;
-	let totalFollowedUsersCount = -1;
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	let percentage = 0;
-
 	const user_id = params.id;
-	// url comes from SvelteKit event
 	const username = url.searchParams.get("username") || "";
 
+	// Create scan record immediately
 	let scan_id: string;
-
 	try {
 		console.log(`Creating scan for user_id: ${user_id}, username: ${username}`);
 		const scan = await pb.collection("scans").create({ user_id, username });
@@ -43,107 +34,153 @@ export const GET = async ({ params, url }) => {
 
 	let instagramUrl = urlGenerator(user_id);
 
-	while (hasNext) {
-		let receivedData: User;
+	// Create a stream to send updates to the client
+	const stream = new ReadableStream({
+		async start(controller) {
+			const encoder = new TextEncoder();
+			const sendUpdate = (data: any) => {
+				controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
+			};
 
-		try {
-			const response = await axios.get(instagramUrl, {
-				headers: {
-					Cookie: cookieString
-				},
-				withCredentials: true,
-				timeout: 10000 // ms cinsinden (örneğin burada 10 saniye)
-			});
-			const userData = response.data.data.user;
+			const results: UserNode[] = [];
+			let scrollCycle = 0;
+			let hasNext = true;
+			let currentFollowedUsersCount = 0;
+			let totalFollowedUsersCount = -1;
+			let percentage = 0;
 
-			receivedData = userData.edge_follow;
+			try {
+				while (hasNext) {
+					let receivedData: User;
 
-		} catch (error: unknown) {
-			if (axios.isAxiosError(error)) {
-				return json({ error: error.message, details: error.response?.data }, { status: 500 });
-			} else {
-				return json({ error: "An unknown error occurred" }, { status: 500 });
+					try {
+						const response = await axios.get(instagramUrl, {
+							headers: { Cookie: cookieString },
+							withCredentials: true,
+							timeout: 10000
+						});
+						const userData = response.data.data.user;
+						receivedData = userData.edge_follow;
+					} catch (error: any) {
+						console.error("Instagram fetch error:", error);
+						sendUpdate({ error: error.message || "Unknown error fetching from Instagram" });
+						controller.close();
+						return;
+					}
+
+					if (totalFollowedUsersCount === -1) {
+						totalFollowedUsersCount = receivedData.count - 1; // -1 accounts for slight mismatch often seen
+					}
+
+					// pagination
+					hasNext = receivedData.page_info.has_next_page;
+					instagramUrl = urlGenerator(user_id, receivedData.page_info.end_cursor);
+
+					const newUsers = receivedData.edges.map(x => x.node);
+					currentFollowedUsersCount += newUsers.length;
+
+					// Avoid division by zero
+					if (totalFollowedUsersCount > 0) {
+						percentage = Math.floor((currentFollowedUsersCount / totalFollowedUsersCount) * 100);
+					} else {
+						percentage = 0;
+					}
+
+					// IMMEDIATE DB INSERT
+					const mappedChunk = newUsers.map((user) => ({
+						scan_id,
+						username: user.username,
+						full_name: user.full_name,
+						user_id: user.id,
+						profile_pic_url: user.profile_pic_url,
+						is_private: user.is_private,
+						is_verified: user.is_verified,
+						followed_by_viewer: user.followed_by_viewer,
+						follows_viewer: user.follows_viewer,
+						requested_by_viewer: user.requested_by_viewer
+					}));
+
+					// Insert logic (fire and forget for speed? No, wait to prevent rate limits/overload)
+					await Promise.all(
+						mappedChunk.map((data) => pb.collection("instagram_users").create(data).catch((err) => {
+							console.error("Error creating user:", data.username, err);
+						}))
+					);
+
+					// Collect results for final stats (optional, could just count DB)
+					// We need them for verified/private count though.
+					results.push(...newUsers);
+
+					// STREAM PROGRESS
+					sendUpdate({
+						type: 'progress',
+						percentage,
+						current: currentFollowedUsersCount,
+						total: totalFollowedUsersCount
+					});
+
+					await sleep(
+						Math.floor(
+							Math.random() * (timings.timeBetweenSearchCycles - timings.timeBetweenSearchCycles * 0.7)
+						) + timings.timeBetweenSearchCycles
+					);
+
+					scrollCycle++;
+
+					if (scrollCycle > 6) {
+						scrollCycle = 0;
+						sendUpdate({ type: 'log', message: `Sleeping ${timings.timeToWaitAfterFiveSearchCycles / 1000}s...` });
+						await sleep(timings.timeToWaitAfterFiveSearchCycles);
+					}
+				}
+
+				// Final Logic
+				const verifiedCount = results.filter((u) => u.is_verified).length;
+				const privateCount = results.filter((u) => u.is_private).length;
+
+				try {
+					console.log(`Updating scan ${scan_id} with final stats.`);
+					await pb.collection("scans").update(scan_id, {
+						count: totalFollowedUsersCount,
+						verified_count: verifiedCount,
+						private_count: privateCount
+					});
+				} catch (e) {
+					console.error("Failed to update scan stats:", e);
+				}
+
+				sendUpdate({
+					type: 'done',
+					user_id,
+					totalFollowedUsersCount,
+					verifiedCount,
+					privateCount,
+					results: results // Sending all results back might be huge? Frontend doesn't seem to display them all immediately in the main page list, but let's keep compatibility.
+					// Actually, the frontend is +page.svelte which only displays "Let's go".
+					// The old code returned "results". The frontend displayed nothing specific about "results" array in main view, 
+					// except maybe for debug?
+					// Ah, the frontend uses `users` array populated from Search... 
+					// Wait, chooseProfile triggers this API. 
+					// The original code returned `results` and the frontend just `response = JSON.stringify(data, null, 2)`.
+					// So sending results is fine for debug, but users are already in DB.
+				});
+
+				controller.close();
+
+			} catch (error) {
+				console.error("Stream error:", error);
+				sendUpdate({ error: "Stream failed" });
+				controller.close();
 			}
 		}
+	});
 
-		if (totalFollowedUsersCount === -1) {
-			totalFollowedUsersCount = receivedData.count - 1;
+	return new Response(stream, {
+		headers: {
+			'Content-Type': 'application/json', // Or text/event-stream, but ndjson is simpler for manual parsing
+			'Cache-Control': 'no-cache',
+			'Connection': 'keep-alive'
 		}
-
-		hasNext = receivedData.page_info.has_next_page;
-		instagramUrl = urlGenerator(user_id, receivedData.page_info.end_cursor);
-		currentFollowedUsersCount += receivedData.edges.length;
-		percentage = Math.floor((currentFollowedUsersCount / totalFollowedUsersCount) * 100);
-
-		receivedData.edges.forEach((x) => results.push(x.node));
-
-		await sleep(
-			Math.floor(
-				Math.random() * (timings.timeBetweenSearchCycles - timings.timeBetweenSearchCycles * 0.7)
-			) + timings.timeBetweenSearchCycles
-		);
-
-		scrollCycle++;
-
-		if (scrollCycle > 6) {
-			scrollCycle = 0;
-			console.log({
-				text: `Sleeping ${timings.timeToWaitAfterFiveSearchCycles / 1000} seconds to prevent getting temp blocked`
-			});
-			await sleep(timings.timeToWaitAfterFiveSearchCycles);
-		}
-	}
-
-	const mappedResults = results.map((user) => ({
-		scan_id,
-		username: user.username,
-		full_name: user.full_name,
-		user_id: user.id,
-		profile_pic_url: user.profile_pic_url,
-		is_private: user.is_private,
-		is_verified: user.is_verified,
-		followed_by_viewer: user.followed_by_viewer,
-		follows_viewer: user.follows_viewer,
-		requested_by_viewer: user.requested_by_viewer
-	}));
-
-	// Pocketbase doesn't support bulk insert directly like Supabase, so we loop.
-	// We use Promise.all to do it in parallel, but maybe in chunks if too many.
-	// For now, let's try parallel chunks of 50 to avoid hitting limits if any.
-
-	const chunkSize = 50;
-	for (let i = 0; i < mappedResults.length; i += chunkSize) {
-		const chunk = mappedResults.slice(i, i + chunkSize);
-		await Promise.all(
-			chunk.map((data) => pb.collection("instagram_users").create(data).catch((err) => {
-				console.error("Error creating user:", data.username, err);
-			}))
-		);
-	}
-
-	// Calculate stats
-	const verifiedCount = results.filter((u) => u.is_verified).length;
-	const privateCount = results.filter((u) => u.is_private).length;
-
-	// Update the scan record with the total count and stats
-	try {
-		console.log(`Updating scan ${scan_id} with count: ${totalFollowedUsersCount}, verified: ${verifiedCount}`);
-		await pb.collection("scans").update(scan_id, {
-			count: totalFollowedUsersCount,
-			verified_count: verifiedCount,
-			private_count: privateCount
-		});
-	} catch (e) {
-		console.error("Failed to update scan stats:", e);
-	}
-
-	return json({
-		user_id,
-		totalFollowedUsersCount,
-		verifiedCount,
-		privateCount,
-		percentage,
-		results
 	});
 };
 

@@ -12,6 +12,8 @@
 	// let nextCode = "";
 	let response = "";
 	let loading = false;
+	let scanProgress = 0;
+	let scanStatus = "Initializing...";
 
 	const fetchData = async (url: string) => {
 		loading = true;
@@ -56,53 +58,54 @@
 
 	const chooseProfile = async (id: string, username: string) => {
 		ds_user_id = id;
-		response = ""; // Clear previous response
+		response = "";
+		loading = true;
+		scanProgress = 0;
+		scanStatus = "Starting scan...";
 
-		// const res = await fetch(`/api/user/${ds_user_id}`);
-		// if (!res || !res.body) return;
+		try {
+			const res = await fetch(`/api/user/${ds_user_id}?username=${encodeURIComponent(username)}`);
+			if (!res.body) throw new Error("No response body");
 
-		// const reader = res.body.getReader();
-		// const decoder = new TextDecoder();
-		// let receivedLength = 0; // Total bytes received
-		// let results = "";
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
 
-		// while (true) {
-		// 	const { done, value } = await reader.read();
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
 
-		// 	if (done) {
-		// 		console.log("Stream complete");
-		// 		break;
-		// 	}
+				const chunk = decoder.decode(value, { stream: true });
+				const lines = chunk.split("\n");
 
-		// 	receivedLength += value.length;
-		// 	results += decoder.decode(value, { stream: true });
+				for (const line of lines) {
+					if (!line.trim()) continue;
+					try {
+						const data = JSON.parse(line);
 
-		// 	response = results;
-
-		// Optionally, process each chunk as it's received
-		// For example, parse JSON lines if the server sends newline-delimited JSON
-		// const lines = response.split('\n');
-		// lines.forEach(line => {
-		//   if (line.trim()) {
-		//     const json = JSON.parse(line);
-		//     // Process json object
-		//   }
-		// });
-		// }
-
-		const { data, error } = await fetchData(
-			`/api/user/${ds_user_id}?username=${encodeURIComponent(username)}`
-		);
-		if (error) {
-			console.error("Veri alınırken hata oluştu:", error);
-			return;
+						if (data.type === "progress") {
+							scanProgress = data.percentage;
+							scanStatus = `Scanning... ${data.current} / ${data.total} (${data.percentage}%)`;
+						} else if (data.type === "log") {
+							console.log("Server Log:", data.message);
+							scanStatus = data.message;
+						} else if (data.type === "done") {
+							scanStatus = "Scan Complete!";
+							response = JSON.stringify(data, null, 2);
+						} else if (data.error) {
+							console.error("Stream error:", data.error);
+							alert("Error: " + data.error);
+						}
+					} catch (e) {
+						console.error("Error parsing stream chunk", e);
+					}
+				}
+			}
+		} catch (e) {
+			console.error("Fetch error:", e);
+			alert("Failed to start scan");
+		} finally {
+			loading = false;
 		}
-
-		// Process the complete response if needed
-		// const data = JSON.parse(response);
-		// console.log("Received", receivedLength, "bytes");
-
-		response = JSON.stringify(data, null, 2);
 	};
 
 	onMount(() => {
@@ -134,9 +137,16 @@
 		</form>
 
 		{#if loading}
-			<div class="flex flex-col items-center space-y-2 justify-center">
-				<ProgressRadial />
-				<p class="font-semibold">Loading</p>
+			<div
+				class="flex flex-col items-center space-y-2 justify-center p-4 card variant-soft-surface"
+			>
+				<ProgressRadial value={scanProgress} />
+				<p class="font-semibold text-lg">{scanStatus}</p>
+				{#if scanProgress > 0}
+					<div class="w-full bg-surface-200 rounded-full h-2.5 dark:bg-surface-700 mt-2">
+						<div class="bg-primary-500 h-2.5 rounded-full" style="width: {scanProgress}%"></div>
+					</div>
+				{/if}
 			</div>
 		{/if}
 
