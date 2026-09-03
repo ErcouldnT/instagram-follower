@@ -1,143 +1,167 @@
 <script lang="ts">
-	import axios from "axios";
-	import { onMount } from "svelte";
-	import { Avatar } from "@skeletonlabs/skeleton";
-	import type { UserNode } from "$lib/user.types";
-	import { scanStore } from "$lib/stores/scanStore";
+	import { resolve } from "$app/paths";
+	import Avatar from "$lib/components/Avatar.svelte";
+	import { RELATION_LABELS, RELATIONS, type Relation } from "$lib/constants";
+	import { scan } from "$lib/scan.svelte";
+	import type { PageData } from "./$types";
 
-	let username: string = "";
-	let ds_user_id: string | null;
-	let inputRef: HTMLInputElement;
+	interface SearchResult {
+		id: string;
+		username: string;
+		fullName: string;
+		profilePicUrl: string;
+		isPrivate: boolean;
+		isVerified: boolean;
+	}
 
-	let users: { user: UserNode }[] = [];
-	// let nextCode = "";
-	let response = "";
-	let loading = false;
+	let { data }: { data: PageData } = $props();
 
-	const fetchData = async (url: string) => {
-		loading = true;
+	let query = $state("");
+	let relation = $state<Relation>("following");
+	let results = $state<SearchResult[]>([]);
+	let searching = $state(false);
+	let searchError = $state<string | null>(null);
+	let searched = $state(false);
+
+	async function search(event: SubmitEvent) {
+		// The original bound this to on:submit without preventing the default,
+		// so the form navigated and threw the results away on every search.
+		event.preventDefault();
+
+		const term = query.trim();
+		if (!term || searching) return;
+
+		searching = true;
+		searchError = null;
+		results = [];
+
 		try {
-			const response = await axios.get(url);
-			loading = false;
-			return { data: response.data, error: null };
+			const response = await fetch(`/api/search?q=${encodeURIComponent(term)}`);
+			const body = (await response.json()) as { users?: SearchResult[]; message?: string };
+			if (!response.ok) throw new Error(body.message ?? `Search failed (HTTP ${response.status})`);
+			results = body.users ?? [];
 		} catch (error) {
-			loading = false;
-			return { data: null, error };
+			searchError = error instanceof Error ? error.message : "Search failed";
+		} finally {
+			searching = false;
+			searched = true;
 		}
-	};
-
-	const getUsernameId = async () => {
-		ds_user_id = null;
-		username = username.trim();
-
-		if (!username) return;
-		users = [];
-
-		try {
-			const { data, error } = await fetchData(`/api/search/${username}`);
-			if (error) {
-				console.error("Veri alınırken hata oluştu:", error);
-				return;
-			}
-
-			response = JSON.stringify(data, null, 2);
-			users = data.users;
-
-			if (!users.length) {
-				alert("Kullanıcı adı bulunamadı");
-				return;
-			}
-
-			const user = users[0].user;
-			const usernameFound = user.username;
-		} catch (err) {
-			console.error("Beklenmeyen bir hata oluştu:", err);
-		}
-	};
-
-	const chooseProfile = async (id: string, targetUsername: string) => {
-		ds_user_id = id;
-		scanStore.startScan(id, targetUsername);
-	};
-
-	onMount(() => {
-		if (inputRef) {
-			inputRef.focus();
-		}
-	});
+	}
 </script>
 
-<div class="p-5 container h-full mx-auto flex justify-center items-center">
-	<div class="space-y-5">
-		<h1 class="h1 m-12">Instagram Follower</h1>
-		<p class="text-center font-thin">Enter "public" instagram username to follow:</p>
-		<form on:submit={getUsernameId} class="flex flex-col space-y-5">
-			<label class="label">
-				<!-- <span>Username</span> -->
-				<input
-					bind:value={username}
-					bind:this={inputRef}
-					class="input"
-					type="text"
-					placeholder="ercouldnt"
-				/>
-			</label>
-			<button on:click={getUsernameId} type="button" class="btn variant-ghost-primary"
-				>Let's go</button
-			>
-			<a href="/scans" class="btn variant-ghost-secondary">View History</a>
-		</form>
+<div class="mx-auto max-w-2xl px-4 py-12">
+	<header class="mb-8 flex items-start justify-between gap-4">
+		<div>
+			<h1 class="text-3xl font-bold tracking-tight">Instagram Follower</h1>
+			<p class="mt-1 text-sm text-ink-dim">
+				Snapshot a public profile's list, then compare snapshots over time.
+			</p>
+		</div>
+		<a href={resolve("/scans")} class="btn shrink-0">History</a>
+	</header>
 
-		{#if loading}
-			<!-- Simple spinner for Search loading, not scan -->
-			<div class="flex flex-col items-center space-y-2 justify-center">
-				<p class="font-semibold">Searching User...</p>
-			</div>
-		{/if}
+	{#if !data.configured}
+		<p class="card mb-6 border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+			No Instagram session is configured. Set <code class="font-mono">IG_COOKIE</code> in the environment
+			before scanning.
+		</p>
+	{/if}
 
-		<!-- <ul>
-			<li><code class="code">ds_user_id: {ds_user_id || "null"}</code></li>
-			<li><code class="code">/src/routes/+layout.svelte</code> - barebones layout</li>
-			<li><code class="code">/src/app.postcss</code> - app wide css</li>
-			<li>
-				<code class="code">/src/routes/+page.svelte</code> - this page, you can replace the contents
-			</li>
-		</ul> -->
+	<form onsubmit={search} class="card space-y-4 p-5">
+		<div>
+			<label for="username" class="mb-1.5 block text-sm font-medium">Username</label>
+			<input
+				id="username"
+				class="input"
+				type="text"
+				autocomplete="off"
+				placeholder="ercouldnt"
+				bind:value={query}
+			/>
+		</div>
 
-		<but class="flex flex-col space-y-5">
-			{#if users.length}
-				{#each users as data}
-					<!-- svelte-ignore a11y-click-events-have-key-events -->
-					<!-- svelte-ignore a11y-no-static-element-interactions -->
-					<div
-						on:click={() => chooseProfile(data.user.id, data.user.username)}
-						class="p-2 border border-transparent flex items-center space-x-5 cursor-pointer hover:border hover:border-dashed hover:border-primary-500 rounded-lg"
+		<fieldset>
+			<legend class="mb-1.5 text-sm font-medium">List to capture</legend>
+			<div class="flex gap-2">
+				{#each RELATIONS as option (option)}
+					<label
+						class="btn flex-1 {relation === option ? 'btn-brand' : ''}"
+						aria-label={RELATION_LABELS[option]}
 					>
-						<Avatar
-							src={`/api/proxy?url=${encodeURIComponent(data.user.profile_pic_url)}`}
-							width="w-20"
-							rounded="rounded-full"
-							alt={data.user.username}
+						<input
+							type="radio"
+							name="relation"
+							value={option}
+							bind:group={relation}
+							class="sr-only"
 						/>
-						<div>
-							<p class="font-bold">{data.user.full_name}</p>
-							<a
-								href={`https://www.instagram.com/${data.user.username}`}
-								class="underline text-blue-500 hover:text-blue-600"
-								target="_blank"
-								rel="noopener noreferrer"
-							>
-								{data.user.username}
-							</a>
-							<p class="text-sm font-thin">
-								{data.user.is_private ? "Private" : data.user.is_verified ? "Verified" : "Public"}
-							</p>
-						</div>
-					</div>
+						{RELATION_LABELS[option]}
+					</label>
 				{/each}
-			{/if}
-		</but>
-	</div>
-</div>
+			</div>
+			<p class="mt-1.5 text-xs text-ink-dim">
+				These are different lists: <em>Following</em> is who they follow,
+				<em>Followers</em> is who follows them.
+			</p>
+		</fieldset>
 
-<pre>{response}</pre>
+		<button
+			type="submit"
+			class="btn btn-brand w-full"
+			disabled={searching || !query.trim() || !data.configured}
+		>
+			{searching ? "Searching..." : "Search"}
+		</button>
+	</form>
+
+	{#if searchError}
+		<p class="card mt-4 border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+			{searchError}
+		</p>
+	{/if}
+
+	{#if results.length > 0}
+		<section class="mt-6">
+			<h2 class="mb-3 text-sm font-medium text-ink-dim">
+				Pick a profile to scan its {RELATION_LABELS[relation].toLowerCase()}
+			</h2>
+			<ul class="space-y-2">
+				{#each results as result (result.id)}
+					<li>
+						<button
+							class="card flex w-full items-center gap-4 p-3 text-left transition-colors hover:border-brand disabled:opacity-50"
+							disabled={scan.isScanning}
+							onclick={() => scan.start(result.id, result.username, relation)}
+						>
+							<Avatar src={result.profilePicUrl} username={result.username} size={48} />
+							<div class="min-w-0 flex-1">
+								<p class="truncate font-semibold">{result.fullName || result.username}</p>
+								<p class="truncate text-sm text-ink-dim">@{result.username}</p>
+							</div>
+							<div class="flex shrink-0 gap-1">
+								{#if result.isVerified}<span class="badge">Verified</span>{/if}
+								<span class="badge">{result.isPrivate ? "Private" : "Public"}</span>
+							</div>
+						</button>
+					</li>
+				{/each}
+			</ul>
+			{#if scan.isScanning}
+				<p class="mt-3 text-xs text-ink-dim">A scan is already running.</p>
+			{/if}
+		</section>
+	{:else if searched && !searching && !searchError}
+		<p class="mt-6 text-center text-sm text-ink-dim">No profiles matched that username.</p>
+	{/if}
+
+	{#if scan.logs.length > 0}
+		<section class="card mt-6 p-4">
+			<h2 class="mb-2 text-sm font-medium">Scan log</h2>
+			<ul class="space-y-1 font-mono text-xs text-ink-dim">
+				{#each scan.logs.slice(-6) as line, index (index)}
+					<li>{line}</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+</div>

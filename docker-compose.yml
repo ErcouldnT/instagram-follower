@@ -1,0 +1,41 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # No host port mapping: Coolify's proxy reaches the container over its own
+    # network and terminates TLS for the public domain.
+    expose:
+      - "3000"
+    environment:
+      # --- Required ----------------------------------------------------------
+      # Public URL Coolify serves this app on. SvelteKit rejects cross-origin
+      # form posts without it, so every action 403s if it is wrong.
+      ORIGIN: ${ORIGIN:-https://example.com}
+      # Whole `Cookie:` header copied from a logged-in instagram.com request.
+      IG_COOKIE: ${IG_COOKIE:-sessionid=REPLACE_ME; ds_user_id=REPLACE_ME; csrftoken=REPLACE_ME}
+
+      # --- Optional ----------------------------------------------------------
+      # Instagram rotates its GraphQL query hashes. Override either one here if
+      # scans start failing with "no follower data" — no rebuild needed.
+      IG_QUERY_HASH_FOLLOWING: ${IG_QUERY_HASH_FOLLOWING:-}
+      IG_QUERY_HASH_FOLLOWERS: ${IG_QUERY_HASH_FOLLOWERS:-}
+
+      # --- Storage and runtime ----------------------------------------------
+      DATABASE_PATH: /data/app.db
+      MIGRATIONS_PATH: /app/drizzle
+      BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-1M}
+    volumes:
+      # The SQLite file must outlive the container. A named volume, not a bind
+      # mount, so a redeploy never re-points it at a fresh empty directory.
+      - instagram-follower-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  instagram-follower-data:

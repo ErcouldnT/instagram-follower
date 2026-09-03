@@ -1,574 +1,328 @@
 <script lang="ts">
-	import { onMount, tick } from "svelte"; // tick might be needed
-	import { pb } from "$lib/pocketbase";
-	import type { ScansResponse, InstagramUsersResponse } from "$lib/pocketbase-types";
+	import { enhance } from "$app/forms";
+	import { resolve } from "$app/paths";
+	import { invalidateAll } from "$app/navigation";
+	import GrowthChart from "$lib/components/GrowthChart.svelte";
+	import Modal from "$lib/components/Modal.svelte";
+	import { RELATION_LABELS } from "$lib/constants";
+	import { downloadCsv } from "$lib/csv";
+	import { formatDate, formatNumber } from "$lib/format";
+	import { Eye, RefreshCcw, Trash2 } from "@lucide/svelte";
+	import type { ActionData, PageData } from "./$types";
 
-	// Chart.js imports
-	import {
-		Chart as ChartJS,
-		Title,
-		Tooltip,
-		Legend,
-		LineElement,
-		LinearScale,
-		PointElement,
-		CategoryScale
-	} from "chart.js";
-	import { Line } from "svelte-chartjs";
+	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	// Icons
-	import { Trash2, RefreshCcw, X } from "lucide-svelte";
+	type Scan = PageData["scans"][number];
 
-	ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale);
+	let selected = $state<number[]>([]);
+	let pendingDelete = $state<Scan | null>(null);
+	let refreshing = $state(false);
+	let comparing = $state(false);
 
-	let scans: ScansResponse[] = [];
-	let loading = true;
-	let error = "";
-	let isRefreshing = false;
+	// Dismissing tracks which result was closed rather than reassigning `form`,
+	// which is a prop and gets restored on the next update anyway.
+	let dismissed = $state<ActionData | null>(null);
 
-	// Selection for comparison
-	let selectedScans: string[] = [];
-	let comparisonResult: {
-		newFollowers: InstagramUsersResponse[];
-		lostFollowers: InstagramUsersResponse[];
-	} | null = null;
-	let comparing = false;
+	const comparison = $derived(
+		form && form !== dismissed && "comparison" in form ? form.comparison : null
+	);
+	const errorMessage = $derived(form && "message" in form ? form.message : null);
 
-	// Deletion
-	let scanToDelete: ScansResponse | null = null;
-	let isDeleting = false;
-
-	// Charts Data
-	let chartData: any = {
-		labels: [],
-		datasets: []
-	};
-
-	onMount(async () => {
-		await fetchScans();
-	});
-
-	async function fetchScans() {
-		loading = true;
-		try {
-			const result = await pb.collection("scans").getFullList<ScansResponse>({
-				sort: "-created"
-			});
-			scans = result;
-			await fixMissingCounts();
-			updateChartData();
-		} catch (e) {
-			console.error(e);
-			error = "Failed to load scans.";
-		} finally {
-			loading = false;
-			isRefreshing = false;
-		}
-	}
-
-	async function refreshScans() {
-		isRefreshing = true;
-		await fetchScans();
-	}
-
-	async function fixMissingCounts() {
-		const updates = scans.map(async (scan, index) => {
-			if (scan.count === undefined) {
-				try {
-					const result = await pb.collection("instagram_users").getList(1, 1, {
-						filter: `scan_id="${scan.id}"`,
-						fields: "id"
-					});
-					const total = result.totalItems;
-					scans[index].count = total;
-					await pb.collection("scans").update(scan.id, { count: total });
-				} catch (err) {
-					console.error("Failed to fix count for scan", scan.id, err);
-				}
-			}
-		});
-
-		await Promise.all(updates);
-		scans = [...scans];
-		updateChartData();
-	}
-
-	// Computed Properties
-	$: groupedScans = scans.reduce(
-		(acc, scan) => {
-			const key = scan.username || "Unknown User";
-			if (!acc[key]) acc[key] = [];
-			acc[key].push(scan);
-			return acc;
-		},
-		{} as Record<string, ScansResponse[]>
+	// Scans of different accounts, or of different lists, cannot be diffed —
+	// disable the control rather than returning a meaningless result.
+	const chosen = $derived(data.scans.filter((scan) => selected.includes(scan.id)));
+	const comparable = $derived(
+		chosen.length === 2 &&
+			chosen[0]!.instagramUserId === chosen[1]!.instagramUserId &&
+			chosen[0]!.relation === chosen[1]!.relation
 	);
 
-	function updateChartData() {
-		const datasets: any[] = [];
-		const allDates = new Set<string>();
-		const userGroups: Record<string, { label: string; dataPoints: Record<string, number> }> = {};
-
-		scans.forEach((scan) => {
-			const date = new Date(scan.created).toLocaleDateString();
-			allDates.add(date);
-			const userId = scan.user_id;
-			const userLabel = scan.username || scan.user_id;
-
-			if (!userGroups[userId]) {
-				userGroups[userId] = { label: userLabel, dataPoints: {} };
-			}
-			if (scan.count !== undefined) {
-				userGroups[userId].dataPoints[date] = scan.count;
-			}
-		});
-
-		const colors = [
-			"rgba(255, 99, 132, 1)",
-			"rgba(54, 162, 235, 1)",
-			"rgba(255, 206, 86, 1)",
-			"rgba(75, 192, 192, 1)",
-			"rgba(153, 102, 255, 1)",
-			"rgba(255, 159, 64, 1)"
-		];
-		let colorIdx = 0;
-
-		const sortedDates = Array.from(allDates).sort(
-			(a, b) => new Date(a).getTime() - new Date(b).getTime()
-		);
-
-		Object.values(userGroups).forEach((group) => {
-			const data = sortedDates.map((date) => group.dataPoints[date] || null);
-			if (data.every((d) => d === null)) return;
-
-			datasets.push({
-				label: group.label,
-				data: data,
-				borderColor: colors[colorIdx % colors.length],
-				backgroundColor: colors[colorIdx % colors.length].replace("1)", "0.5)"),
-				tension: 0.3
-			});
-			colorIdx++;
-		});
-
-		chartData = {
-			labels: sortedDates,
-			datasets
-		};
+	interface Group {
+		key: string;
+		username: string;
+		relation: string;
+		scans: Scan[];
 	}
 
-	const toggleSelection = (scanId: string) => {
-		if (selectedScans.includes(scanId)) {
-			selectedScans = selectedScans.filter((id) => id !== scanId);
+	const grouped = $derived.by(() => {
+		const groups: Group[] = [];
+		for (const scan of data.scans) {
+			const key = `${scan.instagramUserId}:${scan.relation}`;
+			const existing = groups.find((group) => group.key === key);
+			if (existing) {
+				existing.scans.push(scan);
+			} else {
+				groups.push({ key, username: scan.username, relation: scan.relation, scans: [scan] });
+			}
+		}
+		return groups;
+	});
+
+	function toggle(id: number) {
+		if (selected.includes(id)) {
+			selected = selected.filter((value) => value !== id);
+		} else if (selected.length < 2) {
+			selected = [...selected, id];
 		} else {
-			if (selectedScans.length < 2) {
-				selectedScans = [...selectedScans, scanId];
-			}
-		}
-	};
-
-	const compareScans = async () => {
-		if (selectedScans.length !== 2) return;
-		comparing = true;
-		comparisonResult = null;
-
-		try {
-			const [id1, id2] = selectedScans;
-
-			const [users1, users2] = await Promise.all([
-				pb
-					.collection("instagram_users")
-					.getFullList<InstagramUsersResponse>({ filter: `scan_id="${id1}"` }),
-				pb
-					.collection("instagram_users")
-					.getFullList<InstagramUsersResponse>({ filter: `scan_id="${id2}"` })
-			]);
-
-			const scan1 = scans.find((s) => s.id === id1);
-			const scan2 = scans.find((s) => s.id === id2);
-
-			if (!scan1 || !scan2) throw new Error("Scan not found");
-
-			const is1Older = new Date(scan1.created || 0) < new Date(scan2.created || 0);
-
-			const olderUsers = is1Older ? users1 : users2;
-			const newerUsers = is1Older ? users2 : users1;
-
-			const olderMap = new Map(olderUsers.map((u) => [u.user_id, u]));
-			const newerMap = new Map(newerUsers.map((u) => [u.user_id, u]));
-
-			const newFollowers: InstagramUsersResponse[] = [];
-			const lostFollowers: InstagramUsersResponse[] = [];
-
-			for (const [uid, user] of newerMap) {
-				if (!olderMap.has(uid)) {
-					newFollowers.push(user);
-				}
-			}
-
-			for (const [uid, user] of olderMap) {
-				if (!newerMap.has(uid)) {
-					lostFollowers.push(user);
-				}
-			}
-
-			comparisonResult = { newFollowers, lostFollowers };
-		} catch (e) {
-			console.error(e);
-			alert("Error comparing scans");
-		} finally {
-			comparing = false;
-		}
-	};
-
-	const closeComparison = () => {
-		comparisonResult = null;
-	};
-
-	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === "Escape") {
-			if (comparisonResult) closeComparison();
-			if (scanToDelete) cancelDelete();
+			// Replace the oldest pick so a third click is never a dead end.
+			selected = [selected[1]!, id];
 		}
 	}
 
-	const downloadCSV = () => {
-		if (!comparisonResult) return;
+	async function refresh() {
+		refreshing = true;
+		await invalidateAll();
+		refreshing = false;
+	}
 
-		const rows = [
-			["Type", "Username", "Full Name", "Profile URL"],
-			...comparisonResult.newFollowers.map((u) => [
-				"New Follower",
-				u.username || "",
-				u.full_name || "",
-				`https://instagram.com/${u.username}`
+	function exportCsv() {
+		if (!comparison) return;
+		downloadCsv(`${comparison.username}-changes.csv`, [
+			["Change", "Username", "Full name", "Profile"],
+			...comparison.gained.map((user) => [
+				"Gained",
+				user.username,
+				user.fullName,
+				`https://instagram.com/${user.username}`
 			]),
-			...comparisonResult.lostFollowers.map((u) => [
-				"Lost Follower",
-				u.username || "",
-				u.full_name || "",
-				`https://instagram.com/${u.username}`
+			...comparison.lost.map((user) => [
+				"Lost",
+				user.username,
+				user.fullName,
+				`https://instagram.com/${user.username}`
 			])
-		];
-
-		let csvContent = "data:text/csv;charset=utf-8," + rows.map((e) => e.join(",")).join("\n");
-
-		const encodedUri = encodeURI(csvContent);
-		const link = document.createElement("a");
-		link.setAttribute("href", encodedUri);
-		link.setAttribute("download", "followers_comparison.csv");
-		document.body.appendChild(link);
-		link.click();
-		document.body.removeChild(link);
-	};
-
-	// Delete functions
-	const confirmDelete = (scan: ScansResponse) => {
-		scanToDelete = scan;
-	};
-
-	const cancelDelete = () => {
-		scanToDelete = null;
-	};
-
-	const deleteScan = async () => {
-		if (!scanToDelete) return;
-		isDeleting = true;
-		try {
-			await pb.collection("scans").delete(scanToDelete.id);
-
-			// Remove from local state
-			scans = scans.filter((s) => s.id !== scanToDelete?.id);
-			selectedScans = selectedScans.filter((id) => id !== scanToDelete?.id);
-
-			updateChartData();
-
-			scanToDelete = null;
-		} catch (e) {
-			console.error("Error deleting scan:", e);
-			alert("Failed to delete scan.");
-		} finally {
-			isDeleting = false;
-		}
-	};
-
-	function formatDate(dateString?: string) {
-		if (!dateString) return "N/A";
-		// Turkish format: DD.MM.YYYY HH:mm
-		return new Date(dateString).toLocaleString("tr-TR", {
-			day: "2-digit",
-			month: "2-digit",
-			year: "numeric",
-			hour: "2-digit",
-			minute: "2-digit"
-		});
+		]);
 	}
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
-
-<div class="container mx-auto p-5 space-y-8">
-	<!-- Top Header & Action Bar -->
-	<div class="sticky top-0 z-50 bg-surface-100-800-token p-4 shadow-lg rounded-b-2xl -mx-4 md:mx-0">
-		<div class="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
-			<div class="flex items-center space-x-4">
-				<h1 class="h2 font-bold">Scan History</h1>
-				<a href="/" class="btn variant-ghost-secondary btn-sm">New Scan</a>
-				<button
-					class="btn-icon btn-icon-sm variant-ghost-surface"
-					on:click={refreshScans}
-					disabled={isRefreshing}
-					title="Refresh List"
-				>
-					<RefreshCcw size="18" class={isRefreshing ? "animate-spin" : ""} />
-				</button>
-			</div>
-
-			<div class="flex items-center space-x-4">
-				<div class="text-sm opacity-70">
-					{#if selectedScans.length < 2}
-						Select 2 scans to compare
-					{:else}
-						Ready to compare
-					{/if}
-				</div>
-				<button
-					class="btn variant-filled-primary"
-					disabled={selectedScans.length !== 2 || comparing}
-					on:click={compareScans}
-				>
-					{comparing ? "Comparing..." : "Compare Scans"}
-				</button>
-			</div>
+<div class="mx-auto max-w-5xl space-y-8 px-4 py-8">
+	<header class="flex flex-wrap items-center justify-between gap-4">
+		<div class="flex items-center gap-3">
+			<h1 class="text-2xl font-bold">Scan history</h1>
+			<button class="btn px-2 py-2" onclick={refresh} disabled={refreshing} aria-label="Refresh">
+				<RefreshCcw size="16" class={refreshing ? "animate-spin" : ""} />
+			</button>
 		</div>
-	</div>
 
-	<!-- Delete Confirmation Modal -->
-	{#if scanToDelete}
-		<div
-			class="fixed inset-0 z-[100] bg-surface-900/50 flex justify-center items-center backdrop-blur-sm"
-			on:click|self={cancelDelete}
-			role="presentation"
-		>
-			<div class="card p-4 space-y-4 shadow-xl max-w-md w-full bg-surface-100-800-token">
-				<header class="card-header">
-					<h3 class="h3 font-bold text-error-500">Delete Scan?</h3>
-				</header>
-				<div class="p-4">
-					<p>
-						Are you sure you want to delete the scan for <strong>{scanToDelete.username}</strong>
-						dated
-						<strong>{formatDate(scanToDelete.created)}</strong>?
-					</p>
-					<p class="text-sm opacity-70 mt-2">
-						This action cannot be undone. It will remove all follower records associated with this
-						scan.
-					</p>
-				</div>
-				<footer class="card-footer flex justify-end space-x-4">
-					<button class="btn variant-ghost-surface" on:click={cancelDelete}>Cancel</button>
-					<button class="btn variant-filled-error" on:click={deleteScan} disabled={isDeleting}>
-						{#if isDeleting}
-							Deleting...
-						{:else}
-							Delete
-						{/if}
-					</button>
-				</footer>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Comparison Results Modal -->
-	{#if comparisonResult}
-		<div
-			class="fixed inset-0 z-[100] bg-surface-900/50 flex justify-center items-center backdrop-blur-sm p-4"
-			on:click|self={closeComparison}
-			role="presentation"
-		>
-			<div
-				class="card p-6 space-y-4 shadow-2xl max-w-4xl w-full bg-surface-100-800-token max-h-[90vh] overflow-hidden flex flex-col"
+		<div class="flex items-center gap-3">
+			<span class="text-xs text-ink-dim">
+				{#if selected.length < 2}
+					Select two scans of the same account
+				{:else if !comparable}
+					Those scans cover different accounts or lists
+				{:else}
+					Ready to compare
+				{/if}
+			</span>
+			<a href={resolve("/")} class="btn">New scan</a>
+			<form
+				method="POST"
+				action="?/compare"
+				use:enhance={() => {
+					comparing = true;
+					return async ({ update }) => {
+						await update({ reset: false });
+						comparing = false;
+					};
+				}}
 			>
-				<header class="flex justify-between items-center border-b border-surface-500/30 pb-4">
-					<h2 class="h2 font-bold">Comparison Results</h2>
-					<div class="flex space-x-2 items-center">
-						<button class="btn variant-filled-tertiary btn-sm" on:click={downloadCSV}
-							>Export CSV</button
-						>
-						<button
-							class="btn-icon btn-icon-sm variant-ghost-surface ml-2"
-							on:click={closeComparison}
-							title="Close"
-						>
-							<X size="18" />
-						</button>
-					</div>
-				</header>
-
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-8 overflow-y-auto p-2">
-					<!-- New Followers -->
-					<div class="card p-4 space-y-4 border-l-4 border-green-500 h-full">
-						<h3 class="h3 text-green-500 sticky top-0 bg-surface-100-800-token p-2">
-							New Followers ({comparisonResult.newFollowers.length})
-						</h3>
-						{#if comparisonResult.newFollowers.length === 0}
-							<p class="opacity-50">No new followers found.</p>
-						{:else}
-							<ul class="list-disc list-inside">
-								{#each comparisonResult.newFollowers as user}
-									<li>
-										<a
-											href={`https://instagram.com/${user.username}`}
-											target="_blank"
-											class="anchor"
-										>
-											{user.username}
-										</a>
-										<span class="text-xs opacity-70">({user.full_name})</span>
-									</li>
-								{/each}
-							</ul>
-						{/if}
-					</div>
-
-					<!-- Lost Followers -->
-					<div class="card p-4 space-y-4 border-l-4 border-red-500 h-full">
-						<h3 class="h3 text-red-500 sticky top-0 bg-surface-100-800-token p-2">
-							Lost Followers ({comparisonResult.lostFollowers.length})
-						</h3>
-						{#if comparisonResult.lostFollowers.length === 0}
-							<p class="opacity-50">No lost followers found.</p>
-						{:else}
-							<ul class="list-disc list-inside">
-								{#each comparisonResult.lostFollowers as user}
-									<li>
-										<a
-											href={`https://instagram.com/${user.username}`}
-											target="_blank"
-											class="anchor"
-										>
-											{user.username}
-										</a>
-										<span class="text-xs opacity-70">({user.full_name})</span>
-									</li>
-								{/each}
-							</ul>
-						{/if}
-					</div>
-				</div>
-			</div>
+				<input type="hidden" name="a" value={selected[0] ?? ""} />
+				<input type="hidden" name="b" value={selected[1] ?? ""} />
+				<button class="btn btn-brand" disabled={!comparable || comparing}>
+					{comparing ? "Comparing..." : "Compare"}
+				</button>
+			</form>
 		</div>
+	</header>
+
+	{#if errorMessage}
+		<p class="card border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+			{errorMessage}
+		</p>
 	{/if}
 
-	<!-- Main Scans List (Grouped) -->
-	{#if loading}
-		<p class="text-center p-10 opacity-50">Loading scans...</p>
-	{:else if error}
-		<div class="alert variant-filled-error">{error}</div>
-	{:else}
-		<div class="space-y-8">
-			{#each Object.entries(groupedScans) as [username, userScans]}
-				<div class="card p-4 space-y-4">
-					<header class="flex items-center space-x-2 border-b border-surface-500/30 pb-2">
-						<h2 class="h3 font-bold">{username}</h2>
-						<span class="badge variant-soft-surface">{userScans.length} scans</span>
-					</header>
-					<div class="table-container">
-						<table class="table table-hover">
-							<thead>
-								<tr>
-									<th class="w-12">Select</th>
-									<th>Stats</th>
-									<th>Date</th>
-									<th class="text-right">Actions</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each userScans as scan}
-									<tr
-										class:bg-primary-500={selectedScans.includes(scan.id)}
-										class:bg-opacity-20={selectedScans.includes(scan.id)}
-										class="cursor-pointer hover:bg-primary-500/10 transition-colors"
-										on:click={() => toggleSelection(scan.id)}
-									>
-										<td>
-											<input
-												type="checkbox"
-												class="checkbox"
-												checked={selectedScans.includes(scan.id)}
-												on:click|stopPropagation={() => toggleSelection(scan.id)}
-												disabled={!selectedScans.includes(scan.id) && selectedScans.length >= 2}
-											/>
-										</td>
-										<!-- Removed Username Column -->
-										<td>
-											<div class="flex space-x-2">
-												<span class="badge variant-filled-surface" title="Total Count">
-													{scan.count ?? "-"}
-												</span>
-												{#if scan.verified_count}
-													<span class="badge variant-filled-primary" title="Verified"
-														>V: {scan.verified_count}</span
-													>
-												{/if}
-												{#if scan.private_count}
-													<span class="badge variant-filled-warning" title="Private"
-														>P: {scan.private_count}</span
-													>
-												{/if}
-											</div>
-										</td>
-										<td>{formatDate(scan.created)}</td>
-										<td class="text-right space-x-1">
-											<div class="inline-flex" on:click|stopPropagation>
-												<a
-													href={`/scans/${scan.id}`}
-													class="btn-icon variant-ghost-primary btn-icon-sm inline-flex items-center justify-center mr-1"
-													title="View Details"
-												>
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														width="16"
-														height="16"
-														viewBox="0 0 24 24"
-														fill="none"
-														stroke="currentColor"
-														stroke-width="2"
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														class="lucide lucide-eye"
-														><path
-															d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"
-														/><circle cx="12" cy="12" r="3" /></svg
-													>
-												</a>
-												<button
-													class="btn-icon variant-ghost-error btn-icon-sm"
-													on:click={() => confirmDelete(scan)}
-													title="Delete Scan"
-												>
-													<Trash2 size="16" />
-												</button>
-											</div>
-										</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					</div>
-				</div>
-			{/each}
-		</div>
+	{#if data.scans.length === 0}
+		<p class="card p-10 text-center text-sm text-ink-dim">
+			No scans yet. <a href={resolve("/")} class="underline">Run one</a> to get started.
+		</p>
 	{/if}
 
-	<!-- Chart Section (Bottom) -->
-	{#if chartData.datasets.length > 0}
-		<div class="card p-6 mt-8">
-			<h2 class="h3 mb-4 font-bold">Follower Growth</h2>
-			<div class="w-full h-96">
-				<Line data={chartData} options={{ maintainAspectRatio: false, responsive: true }} />
+	{#each grouped as group (group.key)}
+		<section class="card overflow-hidden">
+			<header class="flex items-center gap-2 border-b border-line px-4 py-3">
+				<h2 class="font-semibold">{group.username}</h2>
+				<span class="badge">{RELATION_LABELS[group.relation as "following" | "followers"]}</span>
+				<span class="badge">{group.scans.length} scans</span>
+			</header>
+
+			<div class="overflow-x-auto">
+				<table class="w-full text-sm">
+					<thead class="text-left text-xs text-ink-dim">
+						<tr class="border-b border-line">
+							<th class="w-12 px-4 py-2">Pick</th>
+							<th class="px-4 py-2">Date</th>
+							<th class="px-4 py-2">Accounts</th>
+							<th class="px-4 py-2">Status</th>
+							<th class="px-4 py-2 text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each group.scans as scan (scan.id)}
+							<tr class="border-b border-line/50 last:border-0 hover:bg-surface-3/40">
+								<td class="px-4 py-2">
+									<input
+										type="checkbox"
+										class="size-4 accent-brand"
+										checked={selected.includes(scan.id)}
+										onchange={() => toggle(scan.id)}
+										aria-label="Select scan from {formatDate(scan.createdAt)}"
+									/>
+								</td>
+								<td class="px-4 py-2 whitespace-nowrap">{formatDate(scan.createdAt)}</td>
+								<td class="px-4 py-2">
+									<div class="flex flex-wrap gap-1">
+										<span class="badge">{formatNumber(scan.count)}</span>
+										{#if scan.verifiedCount > 0}
+											<span class="badge">V {formatNumber(scan.verifiedCount)}</span>
+										{/if}
+										{#if scan.privateCount > 0}
+											<span class="badge">P {formatNumber(scan.privateCount)}</span>
+										{/if}
+									</div>
+								</td>
+								<td class="px-4 py-2">
+									{#if scan.status === "completed"}
+										<span class="badge">Done</span>
+									{:else if scan.status === "running"}
+										<span class="badge text-amber-300">Running</span>
+									{:else}
+										<span class="badge text-red-300" title={scan.error ?? ""}>Failed</span>
+									{/if}
+								</td>
+								<td class="px-4 py-2">
+									<div class="flex justify-end gap-1">
+										<a
+											href={resolve("/scans/[id]", { id: String(scan.id) })}
+											class="btn px-2 py-2"
+											aria-label="View scan details"
+										>
+											<Eye size="16" />
+										</a>
+										<button
+											class="btn px-2 py-2"
+											onclick={() => (pendingDelete = scan)}
+											aria-label="Delete scan"
+										>
+											<Trash2 size="16" />
+										</button>
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
 			</div>
-		</div>
+		</section>
+	{/each}
+
+	{#if data.series.length > 0}
+		<section class="card p-5">
+			<h2 class="mb-4 font-semibold">Accounts tracked over time</h2>
+			<GrowthChart series={data.series} />
+		</section>
 	{/if}
 </div>
-```
+
+{#if pendingDelete}
+	{@const target = pendingDelete}
+	<Modal title="Delete this scan?" onclose={() => (pendingDelete = null)}>
+		<p class="text-sm">
+			Delete the scan of <strong>{target.username}</strong> from
+			<strong>{formatDate(target.createdAt)}</strong>?
+		</p>
+		<p class="mt-2 text-sm text-ink-dim">
+			Its {formatNumber(target.count)} stored accounts go with it. This cannot be undone.
+		</p>
+
+		{#snippet actions()}
+			<button class="btn" onclick={() => (pendingDelete = null)}>Cancel</button>
+			<form
+				method="POST"
+				action="?/delete"
+				use:enhance={() => {
+					return async ({ update }) => {
+						await update();
+						pendingDelete = null;
+						selected = selected.filter((id) => id !== target.id);
+					};
+				}}
+			>
+				<input type="hidden" name="id" value={target.id} />
+				<button class="btn btn-danger">Delete</button>
+			</form>
+		{/snippet}
+	</Modal>
+{/if}
+
+{#if comparison}
+	<Modal title="Changes for {comparison.username}" onclose={() => (dismissed = form)} wide>
+		<p class="mb-4 text-xs text-ink-dim">
+			{formatDate(comparison.olderLabel)} → {formatDate(comparison.newerLabel)}
+		</p>
+
+		<div class="grid gap-6 md:grid-cols-2">
+			<div>
+				<h3 class="mb-2 font-semibold text-emerald-400">
+					Gained ({comparison.gained.length})
+				</h3>
+				{#if comparison.gained.length === 0}
+					<p class="text-sm text-ink-dim">None.</p>
+				{:else}
+					<ul class="space-y-1 text-sm">
+						{#each comparison.gained as user (user.instagramUserId)}
+							<li>
+								<a
+									class="underline"
+									href="https://instagram.com/{user.username}"
+									target="_blank"
+									rel="noopener noreferrer">{user.username}</a
+								>
+								{#if user.fullName}
+									<span class="text-ink-dim">— {user.fullName}</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<div>
+				<h3 class="mb-2 font-semibold text-red-400">Lost ({comparison.lost.length})</h3>
+				{#if comparison.lost.length === 0}
+					<p class="text-sm text-ink-dim">None.</p>
+				{:else}
+					<ul class="space-y-1 text-sm">
+						{#each comparison.lost as user (user.instagramUserId)}
+							<li>
+								<a
+									class="underline"
+									href="https://instagram.com/{user.username}"
+									target="_blank"
+									rel="noopener noreferrer">{user.username}</a
+								>
+								{#if user.fullName}
+									<span class="text-ink-dim">— {user.fullName}</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		</div>
+
+		{#snippet actions()}
+			<button class="btn" onclick={exportCsv}>Export CSV</button>
+			<button class="btn btn-brand" onclick={() => (dismissed = form)}>Close</button>
+		{/snippet}
+	</Modal>
+{/if}

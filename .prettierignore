@@ -1,4 +1,11 @@
-# Ignore files for PNPM, NPM and YARN
-pnpm-lock.yaml
+.DS_Store
+node_modules
+/build
+/.svelte-kit
+/package
+/data
+/drizzle
+.env
+.env.*
+!.env.example
 package-lock.json
-yarn.lock

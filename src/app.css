@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+@theme {
+	--color-ink: oklch(0.97 0.005 260);
+	--color-ink-dim: oklch(0.72 0.02 260);
+	--color-surface: oklch(0.19 0.02 260);
+	--color-surface-2: oklch(0.24 0.022 260);
+	--color-surface-3: oklch(0.3 0.024 260);
+	--color-line: oklch(0.36 0.025 260);
+	--color-brand: oklch(0.68 0.17 295);
+	--color-brand-strong: oklch(0.6 0.19 295);
+}
+
+@layer base {
+	html {
+		color-scheme: dark;
+	}
+
+	body {
+		background-color: var(--color-surface);
+		color: var(--color-ink);
+		-webkit-font-smoothing: antialiased;
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--color-brand);
+		outline-offset: 2px;
+	}
+}
+
+@utility card {
+	border-radius: calc(var(--radius-xl));
+	border: 1px solid var(--color-line);
+	background-color: var(--color-surface-2);
+}
+
+@utility btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: --spacing(2);
+	border-radius: var(--radius-lg);
+	border: 1px solid var(--color-line);
+	padding: --spacing(2) --spacing(4);
+	font-size: var(--text-sm);
+	font-weight: 500;
+	line-height: var(--text-sm--line-height);
+	cursor: pointer;
+	transition:
+		background-color 120ms ease,
+		border-color 120ms ease,
+		opacity 120ms ease;
+
+	&:hover:not(:disabled) {
+		background-color: var(--color-surface-3);
+	}
+
+	&:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+}
+
+@utility btn-brand {
+	border-color: transparent;
+	background-color: var(--color-brand);
+	color: oklch(0.16 0.02 295);
+
+	&:hover:not(:disabled) {
+		background-color: var(--color-brand-strong);
+	}
+}
+
+@utility btn-danger {
+	border-color: transparent;
+	background-color: oklch(0.58 0.2 22);
+	color: oklch(0.98 0.01 22);
+
+	&:hover:not(:disabled) {
+		background-color: oklch(0.52 0.2 22);
+	}
+}
+
+@utility input {
+	width: 100%;
+	border-radius: var(--radius-lg);
+	border: 1px solid var(--color-line);
+	background-color: var(--color-surface);
+	padding: --spacing(2) --spacing(3);
+	font-size: var(--text-sm);
+	color: var(--color-ink);
+
+	&::placeholder {
+		color: var(--color-ink-dim);
+	}
+}
+
+@utility badge {
+	display: inline-flex;
+	align-items: center;
+	gap: --spacing(1);
+	border-radius: var(--radius-md);
+	border: 1px solid var(--color-line);
+	background-color: var(--color-surface-3);
+	padding: --spacing(0.5) --spacing(2);
+	font-size: var(--text-xs);
+	line-height: var(--text-xs--line-height);
+	white-space: nowrap;
+}

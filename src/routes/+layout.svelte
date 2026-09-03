@@ -1,59 +1,56 @@
 <script lang="ts">
-	import "../app.postcss";
+	import "../app.css";
+	import { resolve } from "$app/paths";
+	import { scan } from "$lib/scan.svelte";
+	import type { Snippet } from "svelte";
 
-	// Highlight JS
-	import hljs from "highlight.js/lib/core";
-	import "highlight.js/styles/github-dark.css";
-	import { storeHighlightJs } from "@skeletonlabs/skeleton";
-	import xml from "highlight.js/lib/languages/xml"; // for HTML
-	import css from "highlight.js/lib/languages/css";
-	import javascript from "highlight.js/lib/languages/javascript";
-	import typescript from "highlight.js/lib/languages/typescript";
-
-	hljs.registerLanguage("xml", xml); // for HTML
-	hljs.registerLanguage("css", css);
-	hljs.registerLanguage("javascript", javascript);
-	hljs.registerLanguage("typescript", typescript);
-	storeHighlightJs.set(hljs);
-
-	// Floating UI for Popups
-	import { computePosition, autoUpdate, flip, shift, offset, arrow } from "@floating-ui/dom";
-	import { storePopup } from "@skeletonlabs/skeleton";
-	storePopup.set({ computePosition, autoUpdate, flip, shift, offset, arrow });
-
-	// Global Scan Store
-	import { scanStore } from "$lib/stores/scanStore";
-	import { fly } from "svelte/transition";
+	let { children }: { children: Snippet } = $props();
 </script>
 
 <svelte:head>
 	<title>Instagram Follower</title>
+	<meta name="robots" content="noindex" />
 </svelte:head>
 
-<slot />
+<div class="min-h-dvh pb-24">
+	{@render children()}
+</div>
 
-{#if $scanStore.isScanning || ($scanStore.progress === 100 && $scanStore.status === "Scan Complete!")}
-	<div
-		transition:fly={{ y: 50, duration: 300 }}
-		class="fixed bottom-0 left-0 right-0 bg-surface-100-800-token border-t border-surface-500/30 p-4 shadow-2xl z-[90] flex items-center justify-between"
-	>
-		<div class="flex items-center space-x-4 w-full max-w-4xl mx-auto">
-			<div class="flex-1">
-				<div class="flex justify-between mb-1">
-					<span class="font-bold">{$scanStore.targetUsername}</span>
-					<span class="text-xs opacity-70">{$scanStore.status}</span>
+{#if scan.isScanning || scan.finished}
+	<div class="fixed inset-x-0 bottom-0 z-90 border-t border-line bg-surface-2/95 backdrop-blur">
+		<div class="mx-auto flex max-w-4xl items-center gap-4 px-4 py-3">
+			<div class="min-w-0 flex-1">
+				<div class="mb-1 flex items-baseline justify-between gap-3 text-sm">
+					<span class="truncate font-semibold">{scan.targetUsername}</span>
+					<span class="shrink-0 text-xs text-ink-dim">{scan.status}</span>
 				</div>
-				<div class="w-full bg-surface-200 rounded-full h-2 dark:bg-surface-700">
+				<div
+					class="h-1.5 w-full overflow-hidden rounded-full bg-surface-3"
+					role="progressbar"
+					aria-valuenow={scan.progress}
+					aria-valuemin="0"
+					aria-valuemax="100"
+					aria-label="Scan progress"
+				>
 					<div
-						class="bg-primary-500 h-2 rounded-full transition-all duration-300"
-						style="width: {$scanStore.progress}%"
+						class="h-full rounded-full transition-all duration-300 {scan.error
+							? 'bg-red-500'
+							: 'bg-brand'}"
+						style="width: {scan.progress}%"
 					></div>
 				</div>
+				{#if scan.error}
+					<p class="mt-1 text-xs text-red-400">{scan.error}</p>
+				{/if}
 			</div>
-			{#if $scanStore.status === "Scan Complete!"}
-				<button class="btn btn-sm variant-ghost-surface" on:click={() => scanStore.reset()}
-					>Close</button
-				>
+
+			{#if scan.finished}
+				<div class="flex shrink-0 gap-2">
+					{#if scan.scanId && !scan.error}
+						<a class="btn" href={resolve("/scans/[id]", { id: String(scan.scanId) })}>View</a>
+					{/if}
+					<button class="btn" onclick={() => scan.reset()}>Dismiss</button>
+				</div>
 			{/if}
 		</div>
 	</div>

@@ -1,235 +1,184 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import { page } from "$app/stores";
-	import { pb } from "$lib/pocketbase";
-	import type { ScansResponse, InstagramUsersResponse } from "$lib/pocketbase-types";
-	import { Avatar } from "@skeletonlabs/skeleton";
+	import { goto } from "$app/navigation";
+	import { resolve } from "$app/paths";
+	import { page as pageStore } from "$app/state";
+	import Avatar from "$lib/components/Avatar.svelte";
+	import { RELATION_LABELS } from "$lib/constants";
+	import { formatDate, formatNumber } from "$lib/format";
+	import type { PageData } from "./$types";
 
-	let scanId = $page.params.id;
-	let scan: ScansResponse | null = null;
-	let users: InstagramUsersResponse[] = [];
-	let loading = true;
-	let loadingUsers = false;
-	let error = "";
+	let { data }: { data: PageData } = $props();
 
-	// Search & Pagination
-	let searchQuery = "";
-	let currentPage = 1;
-	let totalPages = 1;
-	let totalItems = 0;
-	const perPage = 20;
+	// A writable derived: seeded from the URL, freely typed into, and resynced
+	// whenever navigation (including back/forward) changes the query string.
+	let search = $derived(data.search);
+	let timer: ReturnType<typeof setTimeout>;
 
-	// Debounce timer
-	let searchTimer: NodeJS.Timeout;
+	/** Search and pagination live in the URL, so results stay shareable. */
+	function navigate(params: { q?: string; page?: number }) {
+		const url = new URL(pageStore.url);
+		const q = params.q ?? search;
 
-	onMount(async () => {
-		await fetchScanDetails();
-		await fetchUsers();
-	});
+		if (q.trim()) url.searchParams.set("q", q.trim());
+		else url.searchParams.delete("q");
 
-	async function fetchScanDetails() {
-		try {
-			scan = await pb.collection("scans").getOne<ScansResponse>(scanId);
-		} catch (e) {
-			console.error("Error fetching scan:", e);
-			error = "Failed to load scan details.";
-		}
+		if (params.page && params.page > 1) url.searchParams.set("page", String(params.page));
+		else url.searchParams.delete("page");
+
+		const query = url.searchParams.toString();
+		const target = resolve("/scans/[id]", { id: String(data.scan.id) });
+		// The path already comes from resolve(); the rule just cannot see through
+		// the template literal that appends the query string.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		void goto(query ? `${target}?${query}` : target, { keepFocus: true, noScroll: true });
 	}
 
-	async function fetchUsers() {
-		loadingUsers = true;
-		try {
-			let filter = `scan_id="${scanId}"`;
-			if (searchQuery.trim()) {
-				filter += ` && (username ~ "${searchQuery}" || full_name ~ "${searchQuery}")`;
-			}
-
-			const result = await pb
-				.collection("instagram_users")
-				.getList<InstagramUsersResponse>(currentPage, perPage, {
-					filter: filter,
-					sort: "-followed_by_viewer, -is_verified" // Interesting sort: followed first, then verified
-				});
-
-			users = result.items;
-			totalPages = result.totalPages;
-			totalItems = result.totalItems;
-		} catch (e) {
-			console.error("Error fetching users:", e);
-		} finally {
-			loadingUsers = false;
-			loading = false;
-		}
-	}
-
-	function handleSearch() {
-		clearTimeout(searchTimer);
-		searchTimer = setTimeout(() => {
-			currentPage = 1;
-			fetchUsers();
-		}, 300);
-	}
-
-	function changePage(newPage: number) {
-		if (newPage >= 1 && newPage <= totalPages) {
-			currentPage = newPage;
-			fetchUsers();
-		}
-	}
-
-	function formatDate(dateString?: string) {
-		if (!dateString) return "N/A";
-		// Turkish format: DD.MM.YYYY HH:mm
-		return new Date(dateString).toLocaleString("tr-TR", {
-			day: "2-digit",
-			month: "2-digit",
-			year: "numeric",
-			hour: "2-digit",
-			minute: "2-digit"
-		});
+	function onSearchInput() {
+		clearTimeout(timer);
+		timer = setTimeout(() => navigate({ page: 1 }), 300);
 	}
 </script>
 
-<div class="container mx-auto p-5 space-y-8">
-	<!-- Header / Breadcrumbs -->
-	<div class="flex justify-between items-center">
-		<div class="flex items-center space-x-2 text-sm opacity-70">
-			<a href="/scans" class="hover:underline">Scans</a>
-			<span>/</span>
-			<span>{scanId}</span>
-		</div>
-		<a href="/scans" class="btn variant-ghost-secondary">Back to List</a>
-	</div>
+<div class="mx-auto max-w-5xl space-y-6 px-4 py-8">
+	<nav class="flex items-center justify-between gap-4 text-sm">
+		<a href={resolve("/scans")} class="text-ink-dim hover:underline">← Scan history</a>
+		<a href={resolve("/")} class="btn">New scan</a>
+	</nav>
 
-	{#if loading && !scan}
-		<div class="flex justify-center p-10">
-			<p>Loading scan details...</p>
-		</div>
-	{:else if error}
-		<div class="alert variant-filled-error">{error}</div>
-	{:else if scan}
-		<!-- Scan Metadata Card -->
-		<div class="card p-6 space-y-4">
-			<header class="flex justify-between items-start">
-				<div>
-					<h1 class="h2 font-bold mb-1">{scan.username || "Unknown User"}</h1>
-					<p class="opacity-70">Scanned on: {formatDate(scan.created)}</p>
-					<p class="text-xs font-mono mt-1 opacity-50">ID: {scan.user_id}</p>
-				</div>
-				<div class="flex flex-col items-end space-y-2">
-					<div class="badge variant-filled-surface text-lg px-4 py-2">
-						Total: {scan.count ?? totalItems ?? "-"}
-					</div>
-					<div class="flex space-x-2">
-						{#if scan.verified_count}<span class="badge variant-filled-primary"
-								>Verified: {scan.verified_count}</span
-							>{/if}
-						{#if scan.private_count}<span class="badge variant-filled-warning"
-								>Private: {scan.private_count}</span
-							>{/if}
-					</div>
-				</div>
-			</header>
-		</div>
-
-		<!-- Users List Section -->
-		<div class="card p-4 space-y-4">
-			<div class="flex justify-between items-center">
-				<h2 class="h3 font-bold">Followers Found ({totalItems})</h2>
-				<input
-					class="input w-64"
-					type="search"
-					placeholder="Search username or name..."
-					bind:value={searchQuery}
-					on:input={handleSearch}
-				/>
+	<section class="card p-5">
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<h1 class="text-2xl font-bold">{data.scan.username}</h1>
+				<p class="mt-1 text-sm text-ink-dim">
+					{RELATION_LABELS[data.scan.relation]} · captured {formatDate(data.scan.createdAt)}
+				</p>
+				<p class="mt-1 font-mono text-xs text-ink-dim">ID {data.scan.instagramUserId}</p>
 			</div>
 
-			<div class="table-container">
-				<table class="table table-hover">
-					<thead>
-						<tr>
-							<th class="w-16">Avatar</th>
-							<th>Username</th>
-							<th>Full Name</th>
-							<th>Status</th>
-							<th>Relations</th>
-							<th>Actions</th>
+			<div class="flex flex-wrap justify-end gap-2">
+				<span class="badge">Total {formatNumber(data.scan.count)}</span>
+				{#if data.scan.verifiedCount > 0}
+					<span class="badge">Verified {formatNumber(data.scan.verifiedCount)}</span>
+				{/if}
+				{#if data.scan.privateCount > 0}
+					<span class="badge">Private {formatNumber(data.scan.privateCount)}</span>
+				{/if}
+			</div>
+		</div>
+
+		{#if data.scan.status === "failed"}
+			<p
+				class="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200"
+			>
+				This scan failed: {data.scan.error ?? "unknown error"}. The accounts below are what it
+				managed to save first.
+			</p>
+		{:else if data.scan.status === "running"}
+			<p
+				class="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+			>
+				This scan is still running — refresh for more.
+			</p>
+		{:else if data.scan.reportedCount !== null && data.scan.reportedCount !== data.scan.count}
+			<!-- Surfacing the gap rather than fudging the total, as the old code did. -->
+			<p class="mt-4 text-xs text-ink-dim">
+				Instagram reported {formatNumber(data.scan.reportedCount)} accounts; {formatNumber(
+					data.scan.count
+				)} were retrieved. The reported figure is a snapshot and drifts during a scan.
+			</p>
+		{/if}
+	</section>
+
+	<section class="card overflow-hidden">
+		<header
+			class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3"
+		>
+			<h2 class="font-semibold">
+				{formatNumber(data.total)}
+				{data.search ? "matching accounts" : "accounts"}
+			</h2>
+			<input
+				class="input w-full sm:w-64"
+				type="search"
+				placeholder="Filter by username or name"
+				bind:value={search}
+				oninput={onSearchInput}
+			/>
+		</header>
+
+		<div class="overflow-x-auto">
+			<table class="w-full text-sm">
+				<thead class="text-left text-xs text-ink-dim">
+					<tr class="border-b border-line">
+						<th class="px-4 py-2">Account</th>
+						<th class="px-4 py-2">Status</th>
+						<th class="px-4 py-2">Relationship</th>
+						<th class="px-4 py-2"></th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each data.users as user (user.id)}
+						<tr class="border-b border-line/50 last:border-0 hover:bg-surface-3/40">
+							<td class="px-4 py-2">
+								<div class="flex items-center gap-3">
+									<Avatar src={user.profilePicUrl} username={user.username} size={36} />
+									<div class="min-w-0">
+										<p class="truncate font-medium">{user.username}</p>
+										{#if user.fullName}
+											<p class="truncate text-xs text-ink-dim">{user.fullName}</p>
+										{/if}
+									</div>
+								</div>
+							</td>
+							<td class="px-4 py-2">
+								<div class="flex flex-wrap gap-1">
+									{#if user.isVerified}<span class="badge">Verified</span>{/if}
+									{#if user.isPrivate}<span class="badge">Private</span>{/if}
+								</div>
+							</td>
+							<td class="px-4 py-2 text-xs">
+								<div class="flex flex-col">
+									{#if user.followedByViewer}<span class="text-emerald-400">You follow</span>{/if}
+									{#if user.followsViewer}<span class="text-sky-400">Follows you</span>{/if}
+									{#if user.requestedByViewer}<span class="text-amber-300">Requested</span>{/if}
+								</div>
+							</td>
+							<td class="px-4 py-2 text-right">
+								<a
+									class="btn"
+									href="https://instagram.com/{user.username}"
+									target="_blank"
+									rel="noopener noreferrer">Open</a
+								>
+							</td>
 						</tr>
-					</thead>
-					<tbody>
-						{#if loadingUsers}
-							<tr><td colspan="6" class="text-center p-4">Loading users...</td></tr>
-						{:else if users.length === 0}
-							<tr><td colspan="6" class="text-center p-4">No users found for this scan.</td></tr>
-						{:else}
-							{#each users as user}
-								<tr>
-									<td>
-										<Avatar
-											src={`/api/proxy?url=${encodeURIComponent(user.profile_pic_url || "")}`}
-											width="w-10"
-											rounded="rounded-full"
-											initials={user.username ? user.username.substring(0, 2).toUpperCase() : "??"}
-										/>
-									</td>
-									<td class="font-bold">{user.username}</td>
-									<td>{user.full_name || "-"}</td>
-									<td>
-										<div class="flex space-x-1">
-											{#if user.is_verified}<span class="badge variant-filled-primary text-[10px]"
-													>Verified</span
-												>{/if}
-											{#if user.is_private}<span class="badge variant-filled-warning text-[10px]"
-													>Private</span
-												>{/if}
-										</div>
-									</td>
-									<td class="text-xs">
-										<div class="flex flex-col">
-											{#if user.followed_by_viewer}<span class="text-green-500">You follow</span
-												>{/if}
-											{#if user.follows_viewer}<span class="text-blue-500">Follows you</span>{/if}
-										</div>
-									</td>
-									<td>
-										<a
-											href={`https://instagram.com/${user.username}`}
-											target="_blank"
-											class="btn btn-sm variant-ghost-surface"
-										>
-											View
-										</a>
-									</td>
-								</tr>
-							{/each}
-						{/if}
-					</tbody>
-				</table>
-			</div>
-
-			<!-- Pagination -->
-			{#if totalPages > 1}
-				<div class="flex justify-center space-x-2 pt-4">
-					<button
-						class="btn variant-ghost-surface"
-						disabled={currentPage === 1}
-						on:click={() => changePage(currentPage - 1)}
-					>
-						Previous
-					</button>
-					<span class="flex items-center px-4 font-mono">
-						Page {currentPage} of {totalPages}
-					</span>
-					<button
-						class="btn variant-ghost-surface"
-						disabled={currentPage === totalPages}
-						on:click={() => changePage(currentPage + 1)}
-					>
-						Next
-					</button>
-				</div>
-			{/if}
+					{:else}
+						<tr>
+							<td colspan="4" class="px-4 py-10 text-center text-sm text-ink-dim">
+								{data.search ? "Nothing matched that filter." : "This scan stored no accounts."}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
 		</div>
-	{/if}
+
+		{#if data.totalPages > 1}
+			<footer class="flex items-center justify-center gap-3 border-t border-line px-4 py-3">
+				<button
+					class="btn"
+					disabled={data.page <= 1}
+					onclick={() => navigate({ page: data.page - 1 })}>Previous</button
+				>
+				<span class="font-mono text-xs text-ink-dim">
+					Page {data.page} of {data.totalPages}
+				</span>
+				<button
+					class="btn"
+					disabled={data.page >= data.totalPages}
+					onclick={() => navigate({ page: data.page + 1 })}>Next</button
+				>
+			</footer>
+		{/if}
+	</section>
 </div>

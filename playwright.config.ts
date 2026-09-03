@@ -1,12 +1,16 @@
-import type { PlaywrightTestConfig } from "@playwright/test";
+import { defineConfig } from "@playwright/test";
 
-const config: PlaywrightTestConfig = {
+export default defineConfig({
+	testDir: "tests",
+	testMatch: /(.+\.)?(test|spec)\.[jt]s/,
 	webServer: {
 		command: "npm run build && npm run preview",
-		port: 4173
+		port: 4173,
+		reuseExistingServer: !process.env.CI,
+		env: {
+			// Never point the tests at the real database.
+			DATABASE_PATH: "./data/test.db"
+		}
 	},
-	testDir: "tests",
-	testMatch: /(.+\.)?(test|spec)\.[jt]s/
-};
-
-export default config;
+	use: { baseURL: "http://localhost:4173" }
+});
