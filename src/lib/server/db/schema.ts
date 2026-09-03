@@ -2,11 +2,14 @@ import { relations, sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
- * A scan captures one full pagination pass over an Instagram edge list.
+ * A scan is one capture of a profile's social graph.
  *
- * `relation` records *which* edge was walked. The original code walked
- * `edge_follow` (accounts the target follows) while labelling the result
- * "followers", which are different lists. Storing it removes the ambiguity.
+ * Both edge lists are captured in a single scan rather than as two separate
+ * ones, because the questions worth asking span them: "follows them but is not
+ * followed back" cannot be answered from either list alone.
+ *
+ * `capturedFollowing` / `capturedFollowers` record which lists were actually
+ * walked, so absence from a list can be told apart from never having looked.
  */
 export const scans = sqliteTable(
 	"scans",
@@ -15,18 +18,25 @@ export const scans = sqliteTable(
 		/** Instagram's numeric account id for the scanned profile. */
 		instagramUserId: text("instagram_user_id").notNull(),
 		username: text("username").notNull(),
-		relation: text("relation", { enum: ["following", "followers"] })
-			.notNull()
-			.default("following"),
 		status: text("status", { enum: ["running", "completed", "failed"] })
 			.notNull()
 			.default("running"),
-		/** Rows actually persisted. Authoritative — derived from what we stored. */
-		count: integer("count").notNull().default(0),
-		/** Total Instagram claimed up front. Kept for drift diagnostics only. */
-		reportedCount: integer("reported_count"),
+
+		capturedFollowing: integer("captured_following", { mode: "boolean" }).notNull().default(false),
+		capturedFollowers: integer("captured_followers", { mode: "boolean" }).notNull().default(false),
+
+		/** Rows actually persisted per list. Authoritative. */
+		followingCount: integer("following_count").notNull().default(0),
+		followersCount: integer("followers_count").notNull().default(0),
+
+		/** What Instagram claimed up front. Kept for drift diagnostics only. */
+		reportedFollowingCount: integer("reported_following_count"),
+		reportedFollowersCount: integer("reported_followers_count"),
+
+		/** Over the union of both lists, so an account is counted once. */
 		verifiedCount: integer("verified_count").notNull().default(0),
 		privateCount: integer("private_count").notNull().default(0),
+
 		error: text("error"),
 		createdAt: integer("created_at", { mode: "timestamp_ms" })
 			.notNull()
@@ -39,6 +49,15 @@ export const scans = sqliteTable(
 	]
 );
 
+/**
+ * One row per account per scan, carrying which of the scanned profile's lists
+ * it appeared in.
+ *
+ * These flags are relative to the *scanned profile*. The fields they replace
+ * (`followed_by_viewer`, `follows_viewer`) were relative to whichever session
+ * cookie happened to be configured, which made them meaningless for scanning
+ * anyone else's profile.
+ */
 export const instagramUsers = sqliteTable(
 	"instagram_users",
 	{
@@ -53,13 +72,16 @@ export const instagramUsers = sqliteTable(
 		profilePicUrl: text("profile_pic_url"),
 		isPrivate: integer("is_private", { mode: "boolean" }).notNull().default(false),
 		isVerified: integer("is_verified", { mode: "boolean" }).notNull().default(false),
-		followedByViewer: integer("followed_by_viewer", { mode: "boolean" }).notNull().default(false),
-		followsViewer: integer("follows_viewer", { mode: "boolean" }).notNull().default(false),
-		requestedByViewer: integer("requested_by_viewer", { mode: "boolean" }).notNull().default(false)
+
+		/** The scanned profile follows this account. */
+		inFollowing: integer("in_following", { mode: "boolean" }).notNull().default(false),
+		/** This account follows the scanned profile. */
+		inFollowers: integer("in_followers", { mode: "boolean" }).notNull().default(false)
 	},
 	(table) => [
-		// Instagram's cursor pagination can hand back overlapping pages. Without
-		// this the same account lands in a scan twice and inflates every count.
+		// One row per account per scan. Instagram's pagination hands back
+		// overlapping pages, and the same account legitimately appears in both
+		// lists — either would double-count without this.
 		uniqueIndex("instagram_users_scan_user_idx").on(table.scanId, table.instagramUserId),
 		index("instagram_users_scan_idx").on(table.scanId),
 		index("instagram_users_username_idx").on(table.username)

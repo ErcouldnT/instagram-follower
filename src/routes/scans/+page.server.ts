@@ -26,17 +26,7 @@ export const actions: Actions = {
 		}
 
 		try {
-			const comparison = await compareScans(a, b);
-			return {
-				comparison: {
-					olderLabel: comparison.older.createdAt.toISOString(),
-					newerLabel: comparison.newer.createdAt.toISOString(),
-					username: comparison.newer.username,
-					relation: comparison.newer.relation,
-					gained: comparison.gained,
-					lost: comparison.lost
-				}
-			};
+			return { comparison: await compareScans(a, b) };
 		} catch (error) {
 			return fail(400, {
 				message: error instanceof Error ? error.message : "Comparison failed"

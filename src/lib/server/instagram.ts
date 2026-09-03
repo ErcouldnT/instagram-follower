@@ -1,5 +1,5 @@
-import { instagramCookie, queryHash } from "./config";
-import { PAGE_SIZE, type Relation } from "$lib/constants";
+import { instagramCookie } from "./config";
+import { PAGE_SIZE, type ListKind } from "$lib/constants";
 
 /**
  * Instagram serves different payloads to clients that look automated, so every
@@ -7,6 +7,17 @@ import { PAGE_SIZE, type Relation } from "$lib/constants";
  */
 const USER_AGENT =
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
+/**
+ * The web client's public app id. Constant across sessions, and what the
+ * /api/v1 endpoints authenticate the caller as.
+ *
+ * This replaces the old `query_hash` scheme: those hashes were build artefacts
+ * of Instagram's GraphQL bundle and rotated without notice, which is why the
+ * previous version needed environment overrides for them. The /api/v1 routes
+ * take no such parameter, so there is nothing left to rotate.
+ */
+const APP_ID = "936619743392459";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -30,7 +41,7 @@ function headers(): HeadersInit {
 		"User-Agent": USER_AGENT,
 		Accept: "*/*",
 		"Accept-Language": "en-US,en;q=0.9",
-		"X-IG-App-ID": "936619743392459",
+		"X-IG-App-ID": APP_ID,
 		"X-Requested-With": "XMLHttpRequest",
 		Referer: "https://www.instagram.com/"
 	};
@@ -51,6 +62,9 @@ async function getJson(url: string, signal?: AbortSignal): Promise<unknown> {
 	if (response.status === 429) {
 		throw new InstagramError("Instagram is rate limiting this session.", 429);
 	}
+	if (response.status === 404) {
+		throw new InstagramError("Instagram has no such profile.", 404);
+	}
 	if (!response.ok) {
 		throw new InstagramError(`Instagram returned HTTP ${response.status}.`, response.status);
 	}
@@ -64,7 +78,19 @@ async function getJson(url: string, signal?: AbortSignal): Promise<unknown> {
 	}
 }
 
-export interface SearchResult {
+/** Instagram spells the numeric id `pk` in some payloads and `pk_id` in others. */
+interface RawUser {
+	pk?: string | number;
+	pk_id?: string | number;
+	id?: string | number;
+	username?: string;
+	full_name?: string;
+	profile_pic_url?: string;
+	is_private?: boolean;
+	is_verified?: boolean;
+}
+
+export interface Account {
 	id: string;
 	username: string;
 	fullName: string;
@@ -73,108 +99,112 @@ export interface SearchResult {
 	isVerified: boolean;
 }
 
-interface TopSearchResponse {
-	users?: {
-		user?: {
-			pk?: string;
-			username?: string;
-			full_name?: string;
-			profile_pic_url?: string;
-			is_private?: boolean;
-			is_verified?: boolean;
-		};
-	}[];
+function toAccount(user: RawUser): Account | null {
+	const id = user.pk ?? user.pk_id ?? user.id;
+	if (id === undefined || !user.username) return null;
+	return {
+		id: String(id),
+		username: String(user.username),
+		fullName: user.full_name ?? "",
+		profilePicUrl: user.profile_pic_url ?? "",
+		isPrivate: Boolean(user.is_private),
+		isVerified: Boolean(user.is_verified)
+	};
 }
 
-export async function searchUsers(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
-	const url = `https://www.instagram.com/web/search/topsearch/?context=blended&query=${encodeURIComponent(query)}`;
-	const data = (await getJson(url, signal)) as TopSearchResponse;
+export async function searchUsers(query: string, signal?: AbortSignal): Promise<Account[]> {
+	const url = `https://www.instagram.com/api/v1/web/search/topsearch/?context=blended&query=${encodeURIComponent(query)}`;
+	const data = (await getJson(url, signal)) as { users?: { user?: RawUser }[] };
 
 	// The original code assumed `data.users` was always an array and read
 	// `.length` off it, which threw whenever Instagram answered without it.
 	return (data.users ?? [])
-		.map((entry) => entry.user)
-		.filter((user): user is NonNullable<typeof user> => Boolean(user?.pk && user.username))
-		.map((user) => ({
-			id: String(user.pk),
-			username: String(user.username),
-			fullName: user.full_name ?? "",
-			profilePicUrl: user.profile_pic_url ?? "",
-			isPrivate: Boolean(user.is_private),
-			isVerified: Boolean(user.is_verified)
-		}));
+		.map((entry) => (entry.user ? toAccount(entry.user) : null))
+		.filter((account): account is Account => account !== null);
 }
 
-export interface EdgeNode {
-	id: string;
-	username: string;
-	full_name?: string;
-	profile_pic_url?: string;
-	is_private?: boolean;
-	is_verified?: boolean;
-	followed_by_viewer?: boolean;
-	follows_viewer?: boolean;
-	requested_by_viewer?: boolean;
+export interface ProfileTotals {
+	followingTotal: number;
+	followersTotal: number;
 }
 
-export interface EdgePage {
-	/** Total Instagram claims the list holds. A snapshot, and often stale. */
-	total: number;
-	nodes: EdgeNode[];
-	hasNextPage: boolean;
-	endCursor: string | null;
-}
+/**
+ * The list endpoints do not report a total, so the progress bar's denominator
+ * comes from the profile page's own counters.
+ */
+export async function fetchProfileTotals(
+	username: string,
+	signal?: AbortSignal
+): Promise<ProfileTotals> {
+	const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
+	const data = (await getJson(url, signal)) as {
+		data?: {
+			user?: {
+				edge_follow?: { count?: number };
+				edge_followed_by?: { count?: number };
+			};
+		};
+	};
 
-interface GraphqlResponse {
-	data?: {
-		user?: Record<
-			string,
-			| {
-					count?: number;
-					page_info?: { has_next_page?: boolean; end_cursor?: string | null };
-					edges?: { node?: EdgeNode }[];
-			  }
-			| undefined
-		>;
+	const user = data.data?.user;
+	return {
+		followingTotal: user?.edge_follow?.count ?? 0,
+		followersTotal: user?.edge_followed_by?.count ?? 0
 	};
 }
 
-export async function fetchEdgePage(options: {
+export interface ListPage {
+	accounts: Account[];
+	/** Cursor for the next page, or null when the list is exhausted. */
+	nextCursor: string | null;
+}
+
+/**
+ * One page of a profile's following or followers list.
+ *
+ * Uses `/api/v1/friendships/{id}/…`, which paginates with an opaque `max_id`
+ * cursor and needs no query hash.
+ */
+export async function fetchListPage(options: {
 	userId: string;
-	relation: Relation;
-	after?: string | null;
+	list: ListKind;
+	cursor?: string | null;
 	signal?: AbortSignal;
-}): Promise<EdgePage> {
-	const { userId, relation, after, signal } = options;
-	const edgeKey = relation === "followers" ? "edge_followed_by" : "edge_follow";
+}): Promise<ListPage> {
+	const { userId, list, cursor, signal } = options;
 
-	const variables: Record<string, unknown> = {
-		id: userId,
-		include_reel: false,
-		fetch_mutual: false,
-		first: PAGE_SIZE
+	const params = new URLSearchParams({ count: String(PAGE_SIZE) });
+	if (cursor) params.set("max_id", cursor);
+
+	const url = `https://www.instagram.com/api/v1/friendships/${encodeURIComponent(userId)}/${list}/?${params}`;
+	const data = (await getJson(url, signal)) as {
+		users?: RawUser[];
+		next_max_id?: string | number | null;
+		more_available?: boolean;
+		status?: string;
+		message?: string;
 	};
-	if (after) variables.after = after;
 
-	const url =
-		`https://www.instagram.com/graphql/query/?query_hash=${queryHash(relation)}` +
-		`&variables=${encodeURIComponent(JSON.stringify(variables))}`;
-
-	const data = (await getJson(url, signal)) as GraphqlResponse;
-	const edge = data.data?.user?.[edgeKey];
-
-	if (!edge) {
+	if (data.status && data.status !== "ok") {
+		throw new InstagramError(data.message ?? `Instagram reported status "${data.status}".`);
+	}
+	if (!Array.isArray(data.users)) {
 		throw new InstagramError(
-			"Instagram's response had no follower data. The profile may be private or the query hash stale."
+			"Instagram's response had no user list. The profile may be private or the session lacks access."
 		);
 	}
 
-	return {
-		total: typeof edge.count === "number" ? edge.count : 0,
-		nodes: (edge.edges ?? [])
-			.map((e) => e.node)
-			.filter((node): node is EdgeNode => Boolean(node?.id && node.username)),
-		hasNextPage: Boolean(edge.page_info?.has_next_page),
-		endCursor: edge.page_info?.end_cursor ?? null
-	};
+	const accounts = data.users
+		.map(toAccount)
+		.filter((account): account is Account => account !== null);
+
+	// `more_available: false` is authoritative when present; otherwise the
+	// absence of a cursor ends the walk.
+	const exhausted =
+		data.more_available === false ||
+		data.next_max_id === null ||
+		data.next_max_id === undefined ||
+		data.next_max_id === "";
+
+	return { accounts, nextCursor: exhausted ? null : String(data.next_max_id) };
 }

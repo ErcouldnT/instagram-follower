@@ -1,5 +1,5 @@
 import { error } from "@sveltejs/kit";
-import { RELATIONS, type Relation } from "$lib/constants";
+import { LISTS, type ListKind } from "$lib/constants";
 import { hasInstagramCredentials } from "$lib/server/config";
 import { getRun, startScan, type ScanEvent } from "$lib/server/scan";
 import type { RequestHandler } from "./$types";
@@ -40,19 +40,20 @@ export const POST: RequestHandler = async ({ request }) => {
 	const body = (await request.json().catch(() => null)) as {
 		userId?: unknown;
 		username?: unknown;
-		relation?: unknown;
+		lists?: unknown;
 	} | null;
 
 	const userId = typeof body?.userId === "string" ? body.userId.trim() : "";
 	const username = typeof body?.username === "string" ? body.username.trim() : "";
-	const relation = (
-		RELATIONS.includes(body?.relation as Relation) ? body?.relation : "following"
-	) as Relation;
+	const lists = Array.isArray(body?.lists)
+		? LISTS.filter((list) => (body.lists as unknown[]).includes(list))
+		: ([...LISTS] as ListKind[]);
 
 	if (!/^\d+$/.test(userId)) error(400, "userId must be an Instagram numeric id");
 	if (!username) error(400, "username is required");
+	if (lists.length === 0) error(400, "Select at least one list to capture");
 
-	const run = await startScan({ userId, username, relation });
+	const run = await startScan({ userId, username, lists });
 	return streamEvents(run.subscribe());
 };
 

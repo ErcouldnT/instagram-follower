@@ -1,7 +1,12 @@
 # Instagram Follower
 
-Takes a snapshot of a public Instagram profile's **following** or **followers**
-list, stores it in SQLite, and diffs two snapshots to show who was gained and lost.
+Captures a public Instagram profile's **following** and **followers** lists into
+SQLite, then diffs captures over time to show who was gained and lost — and who
+never followed back.
+
+Both lists are captured in a single scan on purpose: the questions worth asking
+span them. "Follows them but is not followed back" cannot be answered from
+either list alone.
 
 ## Stack
 
@@ -57,15 +62,15 @@ restart — not a rebuild.
 
 ## Scripts
 
-| Script                            | Purpose                                                    |
-| --------------------------------- | ---------------------------------------------------------- |
-| `npm run dev`                     | Dev server                                                 |
-| `npm run build` / `npm start`     | Production build and run                                   |
-| `npm run check`                   | `svelte-check` typecheck                                   |
-| `npm run lint` / `npm run format` | Prettier + ESLint                                          |
-| `npm run db:generate`             | Generate a migration after editing the schema              |
-| `npm run db:studio`               | Browse the database                                        |
-| `npm test`                        | Playwright tests (`npx playwright install chromium` first) |
+| Script                        | Purpose                                              |
+| ----------------------------- | ---------------------------------------------------- |
+| `npm run dev`                 | Dev server                                           |
+| `npm run build` / `npm start` | Production build and run                             |
+| `npm run check`               | `svelte-check` typecheck                             |
+| `npm run lint` / `format`     | Prettier + ESLint                                    |
+| `npm run db:generate`         | Generate a migration after editing the schema        |
+| `npm run db:studio`           | Browse the database                                  |
+| `npm test`                    | Playwright (`npx playwright install chromium` first) |
 
 ## Database
 
@@ -82,11 +87,23 @@ Never hand-write SQL in `drizzle/` and never run `drizzle-kit migrate` or
 
 Two tables:
 
-- **`scans`** — one pagination pass. Carries `relation` (which list was walked),
-  `status` (`running` / `completed` / `failed`), the authoritative `count`, and
-  `reported_count` (what Instagram claimed, kept only for drift diagnostics).
-- **`instagram_users`** — the accounts found, `ON DELETE CASCADE` from the scan,
-  with a unique index on `(scan_id, instagram_user_id)`.
+- **`scans`** — one capture. Records which lists were walked
+  (`captured_following` / `captured_followers`), the authoritative counts, and
+  `reported_*_count` (what Instagram claimed, kept only for drift diagnostics).
+- **`instagram_users`** — one row per account per scan, with `in_following` and
+  `in_followers` flags. `ON DELETE CASCADE` from the scan, unique on
+  `(scan_id, instagram_user_id)`.
+
+Those two flags are what the relationship views are built from:
+
+| View                | Predicate                           |
+| ------------------- | ----------------------------------- |
+| Mutual              | `in_following AND in_followers`     |
+| Doesn't follow back | `in_following AND NOT in_followers` |
+| Not followed back   | `in_followers AND NOT in_following` |
+
+They are relative to the **scanned profile**, not to whichever session cookie is
+configured.
 
 ## Deployment (Coolify)
 
@@ -94,11 +111,10 @@ Deploy as a **Docker Compose** resource pointing at `docker-compose.yml`.
 
 Set these in Coolify's environment:
 
-| Variable                                 | Notes                                                                                                                             |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `IG_COOKIE`                              | Required. The whole cookie header.                                                                                                |
-| `ORIGIN`                                 | Required. Public URL, e.g. `https://follower.example.com`. Without it SvelteKit's CSRF check rejects form posts behind the proxy. |
-| `IG_QUERY_HASH_FOLLOWING` / `_FOLLOWERS` | Optional overrides — see below.                                                                                                   |
+| Variable    | Notes                                                                                                            |
+| ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `IG_COOKIE` | Required. The whole cookie header.                                                                               |
+| `ORIGIN`    | Required. Public URL, e.g. `https://follower.example.com`. Without it SvelteKit's CSRF check rejects form posts. |
 
 The compose file publishes no host port — Coolify's proxy reaches the container
 directly and terminates TLS for the domain.
@@ -110,19 +126,22 @@ matches.
 
 ## Notes and caveats
 
-**This scrapes private Instagram endpoints.** They are undocumented and change
-without notice:
+**This scrapes private Instagram endpoints.** They are undocumented and can
+change without notice. The app uses the `/api/v1/friendships/{id}/following`
+and `/followers` routes, which paginate with an opaque `max_id` cursor and
+authenticate via the `X-IG-App-ID` header.
 
-- The **GraphQL query hashes** rotate. When scans start failing with "no
-  follower data", grab the current hash from a browser session and set
-  `IG_QUERY_HASH_FOLLOWING` / `IG_QUERY_HASH_FOLLOWERS` — no rebuild needed.
+> An earlier version used the legacy `/graphql/query/?query_hash=…` endpoint.
+> Those hashes were build artefacts of Instagram's own bundle and rotated
+> without warning, so they needed environment overrides to stay working. The
+> `/api/v1` routes take no such parameter — there is nothing left to rotate,
+> and the `IG_QUERY_HASH_*` variables are gone.
+
 - Scanning is deliberately slow (jittered ~1s between pages, a 10s pause every
   5 pages). Removing those delays gets the session rate-limited or banned.
-- A scan is capped at `MAX_PAGES` (2000) pages.
-
-**Following ≠ followers.** They are two different lists and the app treats them
-as such; a scan records which one it walked and only same-list scans can be
-compared.
+- Capturing both lists doubles the requests sent to Instagram. Either list can
+  be switched off per scan, at the cost of the cross-list views.
+- Each list is capped at `MAX_PAGES` (2000) pages.
 
 **There is no authentication.** Anyone who can reach the app can scan with your
 Instagram session. Put it behind Coolify's auth or a private network.

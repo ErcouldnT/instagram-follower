@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "9a822e70-f38f-409e-a3ae-2f567619091d",
+  "id": "8fdb4d77-c504-4c34-bff1-b6a4b648b1c6",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "instagram_users": {
@@ -66,24 +66,16 @@
           "autoincrement": false,
           "default": false
         },
-        "followed_by_viewer": {
-          "name": "followed_by_viewer",
+        "in_following": {
+          "name": "in_following",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
           "default": false
         },
-        "follows_viewer": {
-          "name": "follows_viewer",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "requested_by_viewer": {
-          "name": "requested_by_viewer",
+        "in_followers": {
+          "name": "in_followers",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -158,14 +150,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "relation": {
-          "name": "relation",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'following'"
-        },
         "status": {
           "name": "status",
           "type": "text",
@@ -174,16 +158,47 @@
           "autoincrement": false,
           "default": "'running'"
         },
-        "count": {
-          "name": "count",
+        "captured_following": {
+          "name": "captured_following",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "captured_followers": {
+          "name": "captured_followers",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "following_count": {
+          "name": "following_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
           "default": 0
         },
-        "reported_count": {
-          "name": "reported_count",
+        "followers_count": {
+          "name": "followers_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "reported_following_count": {
+          "name": "reported_following_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reported_followers_count": {
+          "name": "reported_followers_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

@@ -1,13 +1,15 @@
-import type { Relation } from "$lib/constants";
+import { LIST_LABELS, type ListKind } from "$lib/constants";
 
 interface ScanEvent {
 	type: "started" | "progress" | "log" | "done" | "error";
 	scanId?: number;
+	list?: ListKind;
 	current?: number;
 	total?: number;
 	percentage?: number;
 	message?: string;
-	count?: number;
+	followingCount?: number;
+	followersCount?: number;
 }
 
 /**
@@ -43,14 +45,14 @@ async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<ScanEve
 	}
 }
 
+const number = (value: number) => value.toLocaleString("tr-TR");
+
 class ScanState {
 	scanId = $state<number | null>(null);
 	isScanning = $state(false);
 	progress = $state(0);
 	status = $state("Idle");
 	logs = $state<string[]>([]);
-	scanned = $state(0);
-	total = $state(0);
 	error = $state<string | null>(null);
 	targetUsername = $state("");
 	finished = $state(false);
@@ -61,14 +63,12 @@ class ScanState {
 		this.progress = 0;
 		this.status = "Idle";
 		this.logs = [];
-		this.scanned = 0;
-		this.total = 0;
 		this.error = null;
 		this.targetUsername = "";
 		this.finished = false;
 	}
 
-	async start(userId: string, username: string, relation: Relation) {
+	async start(userId: string, username: string, lists: ListKind[]) {
 		if (this.isScanning) return;
 
 		this.reset();
@@ -80,7 +80,7 @@ class ScanState {
 			const response = await fetch("/api/scan", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ userId, username, relation })
+				body: JSON.stringify({ userId, username, lists })
 			});
 
 			if (!response.ok || !response.body) {
@@ -107,19 +107,20 @@ class ScanState {
 					this.scanId = event.scanId ?? null;
 					this.status = "Scanning...";
 					break;
-				case "progress":
+				case "progress": {
 					this.progress = event.percentage ?? 0;
-					this.scanned = event.current ?? 0;
-					this.total = event.total ?? 0;
-					this.status = `Scanning ${this.scanned.toLocaleString("tr-TR")} of ${this.total.toLocaleString("tr-TR")}`;
+					const label = event.list ? LIST_LABELS[event.list] : "Accounts";
+					this.status = `${label}: ${number(event.current ?? 0)} of ${number(event.total ?? 0)}`;
 					break;
+				}
 				case "log":
 					if (event.message) this.logs = [...this.logs, event.message];
 					break;
 				case "done":
 					this.progress = 100;
-					this.scanned = event.count ?? this.scanned;
-					this.status = `Done — ${this.scanned.toLocaleString("tr-TR")} accounts saved`;
+					this.status =
+						`Done — ${number(event.followingCount ?? 0)} following, ` +
+						`${number(event.followersCount ?? 0)} followers`;
 					this.isScanning = false;
 					this.finished = true;
 					break;

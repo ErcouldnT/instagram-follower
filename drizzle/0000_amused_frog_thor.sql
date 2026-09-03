@@ -7,9 +7,8 @@ CREATE TABLE `instagram_users` (
 	`profile_pic_url` text,
 	`is_private` integer DEFAULT false NOT NULL,
 	`is_verified` integer DEFAULT false NOT NULL,
-	`followed_by_viewer` integer DEFAULT false NOT NULL,
-	`follows_viewer` integer DEFAULT false NOT NULL,
-	`requested_by_viewer` integer DEFAULT false NOT NULL,
+	`in_following` integer DEFAULT false NOT NULL,
+	`in_followers` integer DEFAULT false NOT NULL,
 	FOREIGN KEY (`scan_id`) REFERENCES `scans`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
@@ -20,10 +19,13 @@ CREATE TABLE `scans` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`instagram_user_id` text NOT NULL,
 	`username` text NOT NULL,
-	`relation` text DEFAULT 'following' NOT NULL,
 	`status` text DEFAULT 'running' NOT NULL,
-	`count` integer DEFAULT 0 NOT NULL,
-	`reported_count` integer,
+	`captured_following` integer DEFAULT false NOT NULL,
+	`captured_followers` integer DEFAULT false NOT NULL,
+	`following_count` integer DEFAULT 0 NOT NULL,
+	`followers_count` integer DEFAULT 0 NOT NULL,
+	`reported_following_count` integer,
+	`reported_followers_count` integer,
 	`verified_count` integer DEFAULT 0 NOT NULL,
 	`private_count` integer DEFAULT 0 NOT NULL,
 	`error` text,

@@ -4,7 +4,7 @@
 	import { invalidateAll } from "$app/navigation";
 	import GrowthChart from "$lib/components/GrowthChart.svelte";
 	import Modal from "$lib/components/Modal.svelte";
-	import { RELATION_LABELS } from "$lib/constants";
+	import { LIST_LABELS } from "$lib/constants";
 	import { downloadCsv } from "$lib/csv";
 	import { formatDate, formatNumber } from "$lib/format";
 	import { Eye, RefreshCcw, Trash2 } from "@lucide/svelte";
@@ -28,32 +28,25 @@
 	);
 	const errorMessage = $derived(form && "message" in form ? form.message : null);
 
-	// Scans of different accounts, or of different lists, cannot be diffed —
-	// disable the control rather than returning a meaningless result.
+	// Scans of different accounts cannot be diffed — disable the control rather
+	// than returning a meaningless result.
 	const chosen = $derived(data.scans.filter((scan) => selected.includes(scan.id)));
 	const comparable = $derived(
-		chosen.length === 2 &&
-			chosen[0]!.instagramUserId === chosen[1]!.instagramUserId &&
-			chosen[0]!.relation === chosen[1]!.relation
+		chosen.length === 2 && chosen[0]!.instagramUserId === chosen[1]!.instagramUserId
 	);
 
 	interface Group {
 		key: string;
 		username: string;
-		relation: string;
 		scans: Scan[];
 	}
 
 	const grouped = $derived.by(() => {
 		const groups: Group[] = [];
 		for (const scan of data.scans) {
-			const key = `${scan.instagramUserId}:${scan.relation}`;
-			const existing = groups.find((group) => group.key === key);
-			if (existing) {
-				existing.scans.push(scan);
-			} else {
-				groups.push({ key, username: scan.username, relation: scan.relation, scans: [scan] });
-			}
+			const existing = groups.find((group) => group.key === scan.instagramUserId);
+			if (existing) existing.scans.push(scan);
+			else groups.push({ key: scan.instagramUserId, username: scan.username, scans: [scan] });
 		}
 		return groups;
 	});
@@ -78,18 +71,22 @@
 	function exportCsv() {
 		if (!comparison) return;
 		downloadCsv(`${comparison.username}-changes.csv`, [
-			["Change", "Username", "Full name", "Profile"],
-			...comparison.gained.map((user) => [
-				"Gained",
-				user.username,
-				user.fullName,
-				`https://instagram.com/${user.username}`
-			]),
-			...comparison.lost.map((user) => [
-				"Lost",
-				user.username,
-				user.fullName,
-				`https://instagram.com/${user.username}`
+			["List", "Change", "Username", "Full name", "Profile"],
+			...comparison.diffs.flatMap((diff) => [
+				...diff.gained.map((user) => [
+					LIST_LABELS[diff.list],
+					"Gained",
+					user.username,
+					user.fullName,
+					`https://instagram.com/${user.username}`
+				]),
+				...diff.lost.map((user) => [
+					LIST_LABELS[diff.list],
+					"Lost",
+					user.username,
+					user.fullName,
+					`https://instagram.com/${user.username}`
+				])
 			])
 		]);
 	}
@@ -109,7 +106,7 @@
 				{#if selected.length < 2}
 					Select two scans of the same account
 				{:else if !comparable}
-					Those scans cover different accounts or lists
+					Those scans cover different accounts
 				{:else}
 					Ready to compare
 				{/if}
@@ -151,7 +148,6 @@
 		<section class="card overflow-hidden">
 			<header class="flex items-center gap-2 border-b border-line px-4 py-3">
 				<h2 class="font-semibold">{group.username}</h2>
-				<span class="badge">{RELATION_LABELS[group.relation as "following" | "followers"]}</span>
 				<span class="badge">{group.scans.length} scans</span>
 			</header>
 
@@ -161,7 +157,8 @@
 						<tr class="border-b border-line">
 							<th class="w-12 px-4 py-2">Pick</th>
 							<th class="px-4 py-2">Date</th>
-							<th class="px-4 py-2">Accounts</th>
+							<th class="px-4 py-2">Following</th>
+							<th class="px-4 py-2">Followers</th>
 							<th class="px-4 py-2">Status</th>
 							<th class="px-4 py-2 text-right">Actions</th>
 						</tr>
@@ -180,15 +177,18 @@
 								</td>
 								<td class="px-4 py-2 whitespace-nowrap">{formatDate(scan.createdAt)}</td>
 								<td class="px-4 py-2">
-									<div class="flex flex-wrap gap-1">
-										<span class="badge">{formatNumber(scan.count)}</span>
-										{#if scan.verifiedCount > 0}
-											<span class="badge">V {formatNumber(scan.verifiedCount)}</span>
-										{/if}
-										{#if scan.privateCount > 0}
-											<span class="badge">P {formatNumber(scan.privateCount)}</span>
-										{/if}
-									</div>
+									{#if scan.capturedFollowing}
+										<span class="badge">{formatNumber(scan.followingCount)}</span>
+									{:else}
+										<span class="text-xs text-ink-dim">not captured</span>
+									{/if}
+								</td>
+								<td class="px-4 py-2">
+									{#if scan.capturedFollowers}
+										<span class="badge">{formatNumber(scan.followersCount)}</span>
+									{:else}
+										<span class="text-xs text-ink-dim">not captured</span>
+									{/if}
 								</td>
 								<td class="px-4 py-2">
 									{#if scan.status === "completed"}
@@ -241,7 +241,7 @@
 			<strong>{formatDate(target.createdAt)}</strong>?
 		</p>
 		<p class="mt-2 text-sm text-ink-dim">
-			Its {formatNumber(target.count)} stored accounts go with it. This cannot be undone.
+			Every account it stored goes with it. This cannot be undone.
 		</p>
 
 		{#snippet actions()}
@@ -267,57 +267,70 @@
 {#if comparison}
 	<Modal title="Changes for {comparison.username}" onclose={() => (dismissed = form)} wide>
 		<p class="mb-4 text-xs text-ink-dim">
-			{formatDate(comparison.olderLabel)} → {formatDate(comparison.newerLabel)}
+			{formatDate(comparison.olderAt)} → {formatDate(comparison.newerAt)}
 		</p>
 
-		<div class="grid gap-6 md:grid-cols-2">
-			<div>
-				<h3 class="mb-2 font-semibold text-emerald-400">
-					Gained ({comparison.gained.length})
-				</h3>
-				{#if comparison.gained.length === 0}
-					<p class="text-sm text-ink-dim">None.</p>
-				{:else}
-					<ul class="space-y-1 text-sm">
-						{#each comparison.gained as user (user.instagramUserId)}
-							<li>
-								<a
-									class="underline"
-									href="https://instagram.com/{user.username}"
-									target="_blank"
-									rel="noopener noreferrer">{user.username}</a
-								>
-								{#if user.fullName}
-									<span class="text-ink-dim">— {user.fullName}</span>
-								{/if}
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</div>
+		{#if comparison.skipped.length > 0}
+			<p
+				class="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+			>
+				Only one of these scans captured
+				{comparison.skipped.map((list) => LIST_LABELS[list]).join(" and ")}, so that list is left
+				out — every entry would otherwise look gained or lost.
+			</p>
+		{/if}
 
-			<div>
-				<h3 class="mb-2 font-semibold text-red-400">Lost ({comparison.lost.length})</h3>
-				{#if comparison.lost.length === 0}
-					<p class="text-sm text-ink-dim">None.</p>
-				{:else}
-					<ul class="space-y-1 text-sm">
-						{#each comparison.lost as user (user.instagramUserId)}
-							<li>
-								<a
-									class="underline"
-									href="https://instagram.com/{user.username}"
-									target="_blank"
-									rel="noopener noreferrer">{user.username}</a
-								>
-								{#if user.fullName}
-									<span class="text-ink-dim">— {user.fullName}</span>
-								{/if}
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</div>
+		<div class="space-y-6">
+			{#each comparison.diffs as diff (diff.list)}
+				<section>
+					<h3 class="mb-3 font-semibold">{LIST_LABELS[diff.list]}</h3>
+					<div class="grid gap-6 md:grid-cols-2">
+						<div>
+							<h4 class="mb-2 text-sm font-semibold text-emerald-400">
+								Gained ({diff.gained.length})
+							</h4>
+							{#if diff.gained.length === 0}
+								<p class="text-sm text-ink-dim">None.</p>
+							{:else}
+								<ul class="space-y-1 text-sm">
+									{#each diff.gained as user (user.instagramUserId)}
+										<li>
+											<a
+												class="underline"
+												href="https://instagram.com/{user.username}"
+												target="_blank"
+												rel="noopener noreferrer">{user.username}</a
+											>
+											{#if user.fullName}<span class="text-ink-dim">— {user.fullName}</span>{/if}
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+
+						<div>
+							<h4 class="mb-2 text-sm font-semibold text-red-400">Lost ({diff.lost.length})</h4>
+							{#if diff.lost.length === 0}
+								<p class="text-sm text-ink-dim">None.</p>
+							{:else}
+								<ul class="space-y-1 text-sm">
+									{#each diff.lost as user (user.instagramUserId)}
+										<li>
+											<a
+												class="underline"
+												href="https://instagram.com/{user.username}"
+												target="_blank"
+												rel="noopener noreferrer">{user.username}</a
+											>
+											{#if user.fullName}<span class="text-ink-dim">— {user.fullName}</span>{/if}
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+					</div>
+				</section>
+			{/each}
 		</div>
 
 		{#snippet actions()}

@@ -5,7 +5,7 @@
 	}
 
 	interface Series {
-		username: string;
+		label: string;
 		points: Point[];
 	}
 
@@ -62,7 +62,7 @@
 
 	const paths = $derived(
 		shown.map((s, index) => ({
-			username: s.username,
+			label: s.label,
 			color: SLOTS[index] ?? SLOTS[0]!,
 			points: s.points.map((p) => ({ ...p, x: scaleX(p.at), y: scaleY(p.count) })),
 			d: s.points
@@ -108,14 +108,12 @@
 		if (hover === null) return [];
 		return paths
 			.map((p) => ({
-				username: p.username,
+				label: p.label,
 				color: p.color,
 				point: p.points.find((pt) => pt.at === hover)
 			}))
 			.filter(
-				(
-					row
-				): row is { username: string; color: string; point: Point & { x: number; y: number } } =>
+				(row): row is { label: string; color: string; point: Point & { x: number; y: number } } =>
 					Boolean(row.point)
 			);
 	});
@@ -177,7 +175,7 @@
 			/>
 		{/if}
 
-		{#each paths as path (path.username)}
+		{#each paths as path (path.label)}
 			<path
 				d={path.d}
 				fill="none"
@@ -208,7 +206,7 @@
 					font-size="11"
 					font-weight="600"
 				>
-					{path.username}
+					{path.label}
 				</text>
 			{/if}
 		{/each}
@@ -220,11 +218,11 @@
 			style="left: {Math.min(Math.max(scaleX(hover) + 12, 8), Math.max(8, width - 190))}px"
 		>
 			<p class="mb-1 font-medium text-ink-dim">{fullFormat.format(new Date(hover))}</p>
-			{#each hoverRows as row (row.username)}
+			{#each hoverRows as row (row.label)}
 				<p class="flex items-center justify-between gap-3">
 					<span class="flex items-center gap-2">
 						<span class="inline-block h-2 w-2 rounded-full" style="background: {row.color}"></span>
-						<span class="text-ink">{row.username}</span>
+						<span class="text-ink">{row.label}</span>
 					</span>
 					<span class="font-mono text-ink">{row.point.count.toLocaleString("tr-TR")}</span>
 				</p>
@@ -236,10 +234,10 @@
 <!-- Legend is always present for two or more series, so identity is never colour alone -->
 {#if paths.length > 1}
 	<ul class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-ink-dim">
-		{#each paths as path (path.username)}
+		{#each paths as path (path.label)}
 			<li class="flex items-center gap-2">
 				<span class="inline-block h-2 w-2 rounded-full" style="background: {path.color}"></span>
-				{path.username}
+				{path.label}
 			</li>
 		{/each}
 	</ul>
@@ -247,6 +245,6 @@
 
 {#if overflow > 0}
 	<p class="mt-2 text-xs text-ink-dim">
-		{overflow} more {overflow === 1 ? "account is" : "accounts are"} tracked but not charted.
+		{overflow} more {overflow === 1 ? "series is" : "series are"} tracked but not charted.
 	</p>
 {/if}

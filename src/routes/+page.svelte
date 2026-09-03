@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from "$app/paths";
 	import Avatar from "$lib/components/Avatar.svelte";
-	import { RELATION_LABELS, RELATIONS, type Relation } from "$lib/constants";
+	import { LIST_HINTS, LIST_LABELS, LISTS, type ListKind } from "$lib/constants";
 	import { scan } from "$lib/scan.svelte";
 	import type { PageData } from "./$types";
 
@@ -17,7 +17,9 @@
 	let { data }: { data: PageData } = $props();
 
 	let query = $state("");
-	let relation = $state<Relation>("following");
+	// Both by default: the interesting questions ("doesn't follow back") need
+	// each list, and they can only be answered when one scan holds both.
+	let lists = $state<ListKind[]>(["following", "followers"]);
 	let results = $state<SearchResult[]>([]);
 	let searching = $state(false);
 	let searchError = $state<string | null>(null);
@@ -47,6 +49,10 @@
 			searched = true;
 		}
 	}
+
+	function toggleList(list: ListKind) {
+		lists = lists.includes(list) ? lists.filter((item) => item !== list) : [...lists, list];
+	}
 </script>
 
 <div class="mx-auto max-w-2xl px-4 py-12">
@@ -54,7 +60,7 @@
 		<div>
 			<h1 class="text-3xl font-bold tracking-tight">Instagram Follower</h1>
 			<p class="mt-1 text-sm text-ink-dim">
-				Snapshot a public profile's list, then compare snapshots over time.
+				Capture a profile's social graph, then compare captures over time.
 			</p>
 		</div>
 		<a href={resolve("/scans")} class="btn shrink-0">History</a>
@@ -81,28 +87,35 @@
 		</div>
 
 		<fieldset>
-			<legend class="mb-1.5 text-sm font-medium">List to capture</legend>
-			<div class="flex gap-2">
-				{#each RELATIONS as option (option)}
-					<label
-						class="btn flex-1 {relation === option ? 'btn-brand' : ''}"
-						aria-label={RELATION_LABELS[option]}
-					>
+			<legend class="mb-1.5 text-sm font-medium">Capture</legend>
+			<div class="space-y-2">
+				{#each LISTS as list (list)}
+					<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-line p-3">
 						<input
-							type="radio"
-							name="relation"
-							value={option}
-							bind:group={relation}
-							class="sr-only"
+							type="checkbox"
+							class="mt-0.5 size-4 accent-brand"
+							checked={lists.includes(list)}
+							onchange={() => toggleList(list)}
 						/>
-						{RELATION_LABELS[option]}
+						<span>
+							<span class="block text-sm font-medium">{LIST_LABELS[list]}</span>
+							<span class="block text-xs text-ink-dim">{LIST_HINTS[list]}</span>
+						</span>
 					</label>
 				{/each}
 			</div>
-			<p class="mt-1.5 text-xs text-ink-dim">
-				These are different lists: <em>Following</em> is who they follow,
-				<em>Followers</em> is who follows them.
-			</p>
+			{#if lists.length === 2}
+				<p class="mt-2 text-xs text-ink-dim">
+					Capturing both is what makes "doesn't follow back" answerable. It also doubles the
+					requests sent to Instagram.
+				</p>
+			{:else if lists.length === 1}
+				<p class="mt-2 text-xs text-amber-300">
+					With one list, mutual and "doesn't follow back" cannot be computed.
+				</p>
+			{:else}
+				<p class="mt-2 text-xs text-red-300">Pick at least one list.</p>
+			{/if}
 		</fieldset>
 
 		<button
@@ -122,16 +135,14 @@
 
 	{#if results.length > 0}
 		<section class="mt-6">
-			<h2 class="mb-3 text-sm font-medium text-ink-dim">
-				Pick a profile to scan its {RELATION_LABELS[relation].toLowerCase()}
-			</h2>
+			<h2 class="mb-3 text-sm font-medium text-ink-dim">Pick a profile to scan</h2>
 			<ul class="space-y-2">
 				{#each results as result (result.id)}
 					<li>
 						<button
 							class="card flex w-full items-center gap-4 p-3 text-left transition-colors hover:border-brand disabled:opacity-50"
-							disabled={scan.isScanning}
-							onclick={() => scan.start(result.id, result.username, relation)}
+							disabled={scan.isScanning || lists.length === 0}
+							onclick={() => scan.start(result.id, result.username, lists)}
 						>
 							<Avatar src={result.profilePicUrl} username={result.username} size={48} />
 							<div class="min-w-0 flex-1">
