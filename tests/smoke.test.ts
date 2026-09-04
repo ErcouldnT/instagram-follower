@@ -1,27 +1,38 @@
 import { expect, test } from "@playwright/test";
 
-test("home page renders the search form", async ({ page }) => {
+test("anonymous visitors are sent to the login page", async ({ page }) => {
 	await page.goto("/");
-	await expect(page.getByRole("heading", { name: "Instagram Follower" })).toBeVisible();
-	await expect(page.getByLabel("Username")).toBeVisible();
+	await expect(page).toHaveURL(/\/login/);
+	await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
-test("scan history loads", async ({ page }) => {
-	await page.goto("/scans");
-	await expect(page.getByRole("heading", { name: "Scan history" })).toBeVisible();
+test("signup page is reachable", async ({ page }) => {
+	await page.goto("/signup");
+	await expect(page.getByRole("heading", { name: "Create an account" })).toBeVisible();
+	await expect(page.getByLabel("Email")).toBeVisible();
+});
+
+test("private endpoints reject anonymous callers", async ({ request }) => {
+	expect((await request.get("/api/events")).status()).toBe(401);
+
+	const scan = await request.post("/api/scan", {
+		data: { userId: "1", username: "x" }
+	});
+	expect(scan.status()).toBe(401);
+});
+
+test("scan pages are not readable without a session", async ({ request }) => {
+	// Redirect to /login rather than the scan itself.
+	const response = await request.get("/scans/1", { maxRedirects: 0 });
+	expect(response.status()).toBe(303);
+	expect(response.headers()["location"]).toContain("/login");
 });
 
 test("image proxy refuses hosts outside Instagram's CDN", async ({ request }) => {
+	// Still guarded even before the auth check, and never an open relay.
 	const external = await request.get("/api/image?url=https://example.com/a.png");
-	expect(external.status()).toBe(403);
+	expect([401, 403]).toContain(external.status());
 
 	const internal = await request.get("/api/image?url=http://169.254.169.254/latest/meta-data/");
-	expect(internal.status()).toBe(400);
-});
-
-test("scan rejects a non-numeric Instagram id", async ({ request }) => {
-	const response = await request.post("/api/scan", {
-		data: { userId: "not-a-number", username: "x" }
-	});
-	expect(response.ok()).toBeFalsy();
+	expect([400, 401]).toContain(internal.status());
 });

@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { resolve } from "$app/paths";
 	import Avatar from "$lib/components/Avatar.svelte";
 	import { LIST_HINTS, LIST_LABELS, LISTS, type ListKind } from "$lib/constants";
-	import { scan } from "$lib/scan.svelte";
+	import { queue } from "$lib/queue.svelte";
 	import type { PageData } from "./$types";
 
 	interface SearchResult {
@@ -24,6 +23,16 @@
 	let searching = $state(false);
 	let searchError = $state<string | null>(null);
 	let searched = $state(false);
+	let queueError = $state<string | null>(null);
+
+	async function queueScan(result: SearchResult) {
+		queueError = null;
+		try {
+			await queue.start(result.id, result.username, lists);
+		} catch (error) {
+			queueError = error instanceof Error ? error.message : "Could not queue the scan";
+		}
+	}
 
 	async function search(event: SubmitEvent) {
 		// The original bound this to on:submit without preventing the default,
@@ -56,14 +65,11 @@
 </script>
 
 <div class="mx-auto max-w-2xl px-4 py-12">
-	<header class="mb-8 flex items-start justify-between gap-4">
-		<div>
-			<h1 class="text-3xl font-bold tracking-tight">Instagram Follower</h1>
-			<p class="mt-1 text-sm text-ink-dim">
-				Capture a profile's social graph, then compare captures over time.
-			</p>
-		</div>
-		<a href={resolve("/scans")} class="btn shrink-0">History</a>
+	<header class="mb-8">
+		<h1 class="text-3xl font-bold tracking-tight">New scan</h1>
+		<p class="mt-1 text-sm text-ink-dim">
+			Capture a profile's social graph, then compare captures over time.
+		</p>
 	</header>
 
 	{#if !data.configured}
@@ -141,8 +147,8 @@
 					<li>
 						<button
 							class="card flex w-full items-center gap-4 p-3 text-left transition-colors hover:border-brand disabled:opacity-50"
-							disabled={scan.isScanning || lists.length === 0}
-							onclick={() => scan.start(result.id, result.username, lists)}
+							disabled={lists.length === 0}
+							onclick={() => queueScan(result)}
 						>
 							<Avatar src={result.profilePicUrl} username={result.username} size={48} />
 							<div class="min-w-0 flex-1">
@@ -157,22 +163,15 @@
 					</li>
 				{/each}
 			</ul>
-			{#if scan.isScanning}
-				<p class="mt-3 text-xs text-ink-dim">A scan is already running.</p>
+			{#if queueError}
+				<p class="mt-3 text-xs text-red-300">{queueError}</p>
+			{:else if queue.busy}
+				<p class="mt-3 text-xs text-ink-dim">
+					Another scan is running — yours joins the queue and starts when the runner frees up.
+				</p>
 			{/if}
 		</section>
 	{:else if searched && !searching && !searchError}
 		<p class="mt-6 text-center text-sm text-ink-dim">No profiles matched that username.</p>
-	{/if}
-
-	{#if scan.logs.length > 0}
-		<section class="card mt-6 p-4">
-			<h2 class="mb-2 text-sm font-medium">Scan log</h2>
-			<ul class="space-y-1 font-mono text-xs text-ink-dim">
-				{#each scan.logs.slice(-6) as line, index (index)}
-					<li>{line}</li>
-				{/each}
-			</ul>
-		</section>
 	{/if}
 </div>

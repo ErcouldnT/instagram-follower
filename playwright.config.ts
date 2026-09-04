@@ -9,7 +9,8 @@ export default defineConfig({
 		reuseExistingServer: !process.env.CI,
 		env: {
 			// Never point the tests at the real database.
-			DATABASE_PATH: "./data/test.db"
+			DATABASE_PATH: "./data/test.db",
+			BETTER_AUTH_SECRET: "playwright-test-secret-not-used-in-production"
 		}
 	},
 	use: { baseURL: "http://localhost:4173" }

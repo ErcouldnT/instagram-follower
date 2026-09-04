@@ -49,7 +49,9 @@ USER node
 
 EXPOSE 3000
 
+# Probes /login, not /: the root now redirects to it for anonymous requests,
+# and a health probe should not depend on redirect-following behaviour.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-	CMD wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1
+	CMD wget -qO- http://127.0.0.1:3000/login >/dev/null || exit 1
 
 CMD ["node", "build/index.js"]

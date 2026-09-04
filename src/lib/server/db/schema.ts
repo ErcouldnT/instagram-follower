@@ -1,5 +1,10 @@
 import { relations, sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { user } from "./auth-schema";
+
+// Better Auth owns these tables; re-exported so one drizzle-kit run covers both
+// halves of the schema and the adapter can find them.
+export * from "./auth-schema";
 
 /**
  * A scan is one capture of a profile's social graph.
@@ -15,12 +20,21 @@ export const scans = sqliteTable(
 	"scans",
 	{
 		id: integer("id").primaryKey({ autoIncrement: true }),
+		/** Owner. Scans are private to the account that started them. */
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
 		/** Instagram's numeric account id for the scanned profile. */
 		instagramUserId: text("instagram_user_id").notNull(),
 		username: text("username").notNull(),
-		status: text("status", { enum: ["running", "completed", "failed"] })
+		/**
+		 * Every user shares one Instagram session, so scans run one at a time.
+		 * `queued` is the waiting state; position is the creation order among
+		 * queued rows.
+		 */
+		status: text("status", { enum: ["queued", "running", "completed", "failed"] })
 			.notNull()
-			.default("running"),
+			.default("queued"),
 
 		capturedFollowing: integer("captured_following", { mode: "boolean" }).notNull().default(false),
 		capturedFollowers: integer("captured_followers", { mode: "boolean" }).notNull().default(false),
@@ -44,8 +58,10 @@ export const scans = sqliteTable(
 		finishedAt: integer("finished_at", { mode: "timestamp_ms" })
 	},
 	(table) => [
+		index("scans_user_id_idx").on(table.userId),
 		index("scans_instagram_user_id_idx").on(table.instagramUserId),
-		index("scans_created_at_idx").on(table.createdAt)
+		index("scans_created_at_idx").on(table.createdAt),
+		index("scans_status_idx").on(table.status)
 	]
 );
 
@@ -88,8 +104,9 @@ export const instagramUsers = sqliteTable(
 	]
 );
 
-export const scansRelations = relations(scans, ({ many }) => ({
-	users: many(instagramUsers)
+export const scansRelations = relations(scans, ({ many, one }) => ({
+	users: many(instagramUsers),
+	owner: one(user, { fields: [scans.userId], references: [user.id] })
 }));
 
 export const instagramUsersRelations = relations(instagramUsers, ({ one }) => ({

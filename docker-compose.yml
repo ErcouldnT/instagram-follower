@@ -11,12 +11,17 @@ services:
     environment:
       # --- Required ----------------------------------------------------------
       # Public URL Coolify serves this app on. SvelteKit rejects cross-origin
-      # form posts without it, so every action 403s if it is wrong.
+      # form posts without it, and Better Auth builds its callbacks from it.
       ORIGIN: ${ORIGIN:-https://example.com}
+      # Signs session cookies. Generate with: openssl rand -base64 32
+      # Changing it signs every user out; an empty value refuses to boot.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-REPLACE_ME_openssl_rand_base64_32}
       # Whole `Cookie:` header copied from a logged-in instagram.com request.
+      # One session is shared by every user, which is why scans are queued.
       IG_COOKIE: ${IG_COOKIE:-sessionid=REPLACE_ME; ds_user_id=REPLACE_ME; csrftoken=REPLACE_ME}
 
       # --- Storage and runtime ----------------------------------------------
+      NODE_ENV: production
       DATABASE_PATH: /data/app.db
       MIGRATIONS_PATH: /app/drizzle
       BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-1M}
@@ -25,7 +30,7 @@ services:
       # mount, so a redeploy never re-points it at a fresh empty directory.
       - instagram-follower-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/login >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

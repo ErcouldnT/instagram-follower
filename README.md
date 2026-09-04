@@ -8,6 +8,10 @@ Both lists are captured in a single scan on purpose: the questions worth asking
 span them. "Follows them but is not followed back" cannot be answered from
 either list alone.
 
+Multi-user: each account signs in with an email and password and sees only its
+own scans. Because every account shares one Instagram session, scans run **one
+at a time** in a global queue, with live position and progress over SSE.
+
 ## Stack
 
 |            |                                                 |
@@ -24,9 +28,12 @@ either list alone.
 
 ```bash
 npm install
-cp .env.example .env      # then paste a real IG_COOKIE
+cp .env.example .env
+# set BETTER_AUTH_SECRET (openssl rand -base64 32) and IG_COOKIE
 npm run dev
 ```
+
+Then open the app and create an account at `/signup`.
 
 The database file is created automatically at `DATABASE_PATH` (default
 `./data/app.db`) and migrations are applied on boot.
@@ -59,6 +66,43 @@ request to `instagram.com` → Request Headers → copy the whole `cookie:` valu
 
 Credentials are read through `$env/dynamic/private`, so rotating a cookie is a
 restart — not a rebuild.
+
+## Accounts and privacy
+
+Sign-up is email + password through Better Auth. There is no email
+verification, because no mail transport is configured — enable
+`requireEmailVerification` in `src/lib/server/auth.ts` once SMTP exists.
+
+Scans belong to the account that started them. Ownership is part of the SQL
+predicate on every read and delete, not a check applied afterwards, so another
+user's scan id returns 404 rather than their data. `src/hooks.server.ts` guards
+every route that is not explicitly public, which makes a newly added route
+private by default.
+
+**`BETTER_AUTH_SECRET` is required in production.** Without it the app refuses
+to start rather than falling back to an ephemeral secret that would sign
+everyone out on each restart.
+
+> Everyone on an instance shares one Instagram session — the `IG_COOKIE`. A
+> user's scans are private to them, but every scan is performed _as_ whoever
+> owns that cookie. Only give accounts to people you would hand the session to.
+
+## The scan queue
+
+One scan runs at a time across the whole instance. Two scans at once would
+double the request rate against the single shared Instagram session, which is
+exactly what gets it rate limited or banned.
+
+Waiting scans are stored with status `queued` and ordered by creation time, so
+a redeploy does not lose anyone's place. A scan caught mid-flight by a restart
+goes back to the **front** of the queue and its partial rows are deleted first —
+the final tallies are derived from the table, so leftovers would inflate them.
+
+Live state arrives over server-sent events at `/api/events`. EventSource
+reconnects on its own, which matters when a scan can sit in the queue for a
+long time. The stream is projected per user: you see your own scans in full,
+and other people's only as a count of how many are waiting and whether the
+runner is busy.
 
 ## Scripts
 
@@ -138,10 +182,12 @@ authenticate via the `X-IG-App-ID` header.
 > and the `IG_QUERY_HASH_*` variables are gone.
 
 - Scanning is deliberately slow (jittered ~1s between pages, a 10s pause every
-  5 pages). Removing those delays gets the session rate-limited or banned.
+  5 pages) and never concurrent. Removing those delays, or the queue, gets the
+  session rate-limited or banned.
 - Capturing both lists doubles the requests sent to Instagram. Either list can
   be switched off per scan, at the cost of the cross-list views.
 - Each list is capped at `MAX_PAGES` (2000) pages.
 
-**There is no authentication.** Anyone who can reach the app can scan with your
-Instagram session. Put it behind Coolify's auth or a private network.
+**Sign-up is open by default.** Anyone who can reach the instance can create an
+account and scan using your Instagram session. Put it behind Coolify's auth or a
+private network if that is not what you want.

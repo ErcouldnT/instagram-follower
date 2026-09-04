@@ -3,15 +3,19 @@ import { db } from "./db";
 import { instagramUsers, scans, type InstagramUser, type Scan } from "./db/schema";
 import { USERS_PER_PAGE, type ListKind, type UserFilter } from "$lib/constants";
 
-export function listScans(): Promise<Scan[]> {
-	return db.select().from(scans).orderBy(desc(scans.createdAt));
+/**
+ * Every read is scoped by owner at the query level rather than checked after
+ * loading. A missed check would otherwise hand one user another's scan.
+ */
+export function listScans(userId: string): Promise<Scan[]> {
+	return db.select().from(scans).where(eq(scans.userId, userId)).orderBy(desc(scans.createdAt));
 }
 
-export function getScan(id: number): Promise<Scan | undefined> {
+export function getScan(id: number, userId: string): Promise<Scan | undefined> {
 	return db
 		.select()
 		.from(scans)
-		.where(eq(scans.id, id))
+		.where(and(eq(scans.id, id), eq(scans.userId, userId)))
 		.limit(1)
 		.then((rows) => rows[0]);
 }
@@ -45,6 +49,7 @@ export async function getScanUsers(options: {
 	search: string;
 	filter: UserFilter;
 }): Promise<{ users: InstagramUser[]; total: number; totalPages: number }> {
+	// Callers reach this only after getScan() has proved ownership of scanId.
 	const term = options.search.trim();
 
 	const where = and(
@@ -131,8 +136,8 @@ export interface Comparison {
  * and diffed them in JavaScript, shipping tens of thousands of records to
  * compute two small lists.
  */
-export async function compareScans(idA: number, idB: number): Promise<Comparison> {
-	const [a, b] = await Promise.all([getScan(idA), getScan(idB)]);
+export async function compareScans(idA: number, idB: number, userId: string): Promise<Comparison> {
+	const [a, b] = await Promise.all([getScan(idA, userId), getScan(idB, userId)]);
 	if (!a || !b) throw new Error("One of the scans no longer exists.");
 
 	// Diffing two different accounts produces a meaningless result: every entry
@@ -197,9 +202,14 @@ export async function compareScans(idA: number, idB: number): Promise<Comparison
 	};
 }
 
-export async function deleteScan(id: number): Promise<void> {
+/** Deletes only if the caller owns it; returns false when they do not. */
+export async function deleteScan(id: number, userId: string): Promise<boolean> {
 	// instagram_users rows go with it via ON DELETE CASCADE.
-	await db.delete(scans).where(eq(scans.id, id));
+	const result = await db
+		.delete(scans)
+		.where(and(eq(scans.id, id), eq(scans.userId, userId)))
+		.run();
+	return result.changes > 0;
 }
 
 export interface GrowthSeries {
@@ -208,7 +218,7 @@ export interface GrowthSeries {
 }
 
 /** Per-account, per-list time series for the growth chart. */
-export async function growthSeries(): Promise<GrowthSeries[]> {
+export async function growthSeries(userId: string): Promise<GrowthSeries[]> {
 	const rows = await db
 		.select({
 			username: scans.username,
@@ -220,7 +230,7 @@ export async function growthSeries(): Promise<GrowthSeries[]> {
 			followersCount: scans.followersCount
 		})
 		.from(scans)
-		.where(eq(scans.status, "completed"))
+		.where(and(eq(scans.userId, userId), eq(scans.status, "completed")))
 		.orderBy(scans.createdAt);
 
 	const series = new Map<string, GrowthSeries>();
