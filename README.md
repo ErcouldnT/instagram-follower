@@ -87,6 +87,18 @@ everyone out on each restart.
 > user's scans are private to them, but every scan is performed _as_ whoever
 > owns that cookie. Only give accounts to people you would hand the session to.
 
+### Tests
+
+```bash
+npx playwright install chromium   # once
+npm test
+```
+
+The suite covers the auth guards, cross-account isolation (one account gets a
+404 for another's scan id), and the queue reporting positions over SSE. It runs
+against a throwaway database with a deliberately invalid `IG_COOKIE`, so scans
+reach the queue and then fail fast at Instagram without needing a real session.
+
 ## The scan queue
 
 One scan runs at a time across the whole instance. Two scans at once would
@@ -106,15 +118,15 @@ runner is busy.
 
 ## Scripts
 
-| Script                        | Purpose                                              |
-| ----------------------------- | ---------------------------------------------------- |
-| `npm run dev`                 | Dev server                                           |
-| `npm run build` / `npm start` | Production build and run                             |
-| `npm run check`               | `svelte-check` typecheck                             |
-| `npm run lint` / `format`     | Prettier + ESLint                                    |
-| `npm run db:generate`         | Generate a migration after editing the schema        |
-| `npm run db:studio`           | Browse the database                                  |
-| `npm test`                    | Playwright (`npx playwright install chromium` first) |
+| Script                        | Purpose                                       |
+| ----------------------------- | --------------------------------------------- |
+| `npm run dev`                 | Dev server                                    |
+| `npm run build` / `npm start` | Production build and run                      |
+| `npm run check`               | `svelte-check` typecheck                      |
+| `npm run lint` / `format`     | Prettier + ESLint                             |
+| `npm run db:generate`         | Generate a migration after editing the schema |
+| `npm run db:studio`           | Browse the database                           |
+| `npm test`                    | Playwright end-to-end suite                   |
 
 ## Database
 

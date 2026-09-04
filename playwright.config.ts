@@ -10,7 +10,12 @@ export default defineConfig({
 		env: {
 			// Never point the tests at the real database.
 			DATABASE_PATH: "./data/test.db",
-			BETTER_AUTH_SECRET: "playwright-test-secret-not-used-in-production"
+			BETTER_AUTH_SECRET: "playwright-test-secret-not-used-in-production",
+			// Deliberately invalid: lets scans reach the queue and fail fast at
+			// Instagram, so queueing can be tested without a real session.
+			IG_COOKIE: "sessionid=playwright-not-a-real-session; ds_user_id=0",
+			// The suite signs up several accounts in seconds from one address.
+			DISABLE_RATE_LIMIT: "1"
 		}
 	},
 	use: { baseURL: "http://localhost:4173" }

@@ -37,6 +37,16 @@ export const auth = betterAuth({
 		requireEmailVerification: false,
 		minPasswordLength: 8
 	},
+	rateLimit: {
+		/**
+		 * Left on in production: it is what stops credential stuffing against
+		 * sign-in. Disabled only by the end-to-end suite, which creates several
+		 * accounts in seconds from one address. Deliberately absent from
+		 * .env.example and docker-compose.yml so it cannot be copied into a
+		 * deployment by accident.
+		 */
+		enabled: env.DISABLE_RATE_LIMIT !== "1"
+	},
 	session: {
 		expiresIn: 60 * 60 * 24 * 30,
 		updateAge: 60 * 60 * 24

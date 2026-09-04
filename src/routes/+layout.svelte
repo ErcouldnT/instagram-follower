@@ -10,6 +10,15 @@
 	// One event stream per tab, opened only for signed-in users.
 	onMount(() => (data.user ? queue.connect() : undefined));
 
+	/**
+	 * The bar is a fixed overlay, so it cannot be allowed to grow with the
+	 * queue — six waiting scans would cover the page. Show the running scan and
+	 * the next couple, and summarise the rest.
+	 */
+	const VISIBLE = 3;
+	const shown = $derived(queue.mine.slice(0, VISIBLE));
+	const hidden = $derived(Math.max(0, queue.mine.length - VISIBLE));
+
 	async function logout() {
 		const { signOut } = await import("$lib/auth-client");
 		await signOut();
@@ -37,14 +46,14 @@
 	</header>
 {/if}
 
-<div class="min-h-dvh {queue.mine.length > 0 ? 'pb-32' : ''}">
+<div class="min-h-dvh {queue.mine.length > 0 ? 'pb-56' : ''}">
 	{@render children()}
 </div>
 
 {#if data.user && queue.mine.length > 0}
 	<div class="fixed inset-x-0 bottom-0 z-90 border-t border-line bg-surface-2/95 backdrop-blur">
 		<div class="mx-auto max-w-4xl space-y-3 px-4 py-3">
-			{#each queue.mine as scan (scan.scanId)}
+			{#each shown as scan (scan.scanId)}
 				<div class="flex items-center gap-4">
 					<div class="min-w-0 flex-1">
 						<div class="mb-1 flex items-baseline justify-between gap-3 text-sm">
@@ -86,6 +95,12 @@
 					</div>
 				</div>
 			{/each}
+
+			{#if hidden > 0}
+				<p class="text-center text-xs text-ink-dim">
+					and {hidden} more of yours further down the queue
+				</p>
+			{/if}
 
 			{#if queue.waiting > 0}
 				<p class="text-center text-xs text-ink-dim">
